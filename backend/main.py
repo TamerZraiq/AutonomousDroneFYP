@@ -62,17 +62,26 @@ def health():
 
 
 @app.websocket("/ws/lidar")
+@app.websocket("/ws/lidar")
 async def lidar_ws(ws: WebSocket):
     await ws.accept()
     try:
         send_interval = 0.1  # ~10 FPS
         while True:
-            xs, ys, cs = lidar.snapshot(max_out=1500)
-            payload = json.dumps({"x": xs, "y": ys, "c": cs})
+            xs, ys, cs, nearest = lidar.snapshot(max_out=1500)
+            too_close = nearest is not None and nearest < 0.05
+            payload = json.dumps({
+                "x": xs,
+                "y": ys,
+                "c": cs,
+                "nearest_distance": nearest,
+                "too_close": too_close
+            })
             await ws.send_text(payload)
+            if too_close:
+                print(f"[ALERT] Object too close: {nearest*100:.1f} cm")
             await asyncio.sleep(send_interval)
     except WebSocketDisconnect:
-        pass
+        print("Client disconnected")
     except Exception as e:
         print("WebSocket error:", e)
-        pass
