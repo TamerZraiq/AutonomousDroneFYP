@@ -100,11 +100,21 @@ class LidarStreamer:
                 except: pass
                 self._ser = None
 
-    def snapshot(self, max_out:int=1200) -> Tuple[List[float], List[float], List[int]]:
-        """Return up to max_out latest points as 3 parallel lists (x,y,c)."""
+    def snapshot(self, max_out:int=1200):
+        """Return up to max_out latest points as 3 parallel lists (x,y,c),
+        along with the nearest distance in meters."""
         with self._lock:
             pts = list(self._points)[-max_out:]
+
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         cs = [p[2] for p in pts]
-        return xs, ys, cs
+
+        # compute nearest point distance
+        import math
+        if xs and ys:
+            nearest = min(math.sqrt(x**2 + y**2) for x, y in zip(xs, ys))
+        else:
+            nearest = None
+
+        return xs, ys, cs, nearest
