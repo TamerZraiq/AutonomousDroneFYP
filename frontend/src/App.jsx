@@ -45,6 +45,6 @@ export default function App() {
         </DashboardCard>
       </section>
     </div>
-    
+
   );
 }

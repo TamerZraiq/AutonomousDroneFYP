@@ -1,9 +1,14 @@
 export default function AICamFeed() {
+  const backendUrl = "http://172.20.10.3:8000/camera/stream"; 
+
   return (
-    <div className="text-zinc-500 text-sm">
-      <div className="w-full h-64 bg-black/50 border border-zinc-800 rounded-lg flex items-center justify-center">
-        <span>AI Camera Feed (coming soon)</span>
-      </div>
+    <div className="flex justify-center items-center w-full h-full">
+      <img
+        src={backendUrl}
+        alt="AI Camera Live Feed"
+        className="rounded-lg shadow-lg max-h-80 object-contain"
+        style={{ borderRadius: "10px" }}
+      />
     </div>
   );
 }
