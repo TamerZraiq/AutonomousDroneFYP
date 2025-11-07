@@ -3,9 +3,20 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import asyncio, json
-from lidar_test.lidar_streamer import LidarStreamer
+from backend.app.lidar_streamer import LidarStreamer
+from backend.app.camera_streamer import router as camera_router
+
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+app.include_router(camera_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # === STATIC FILES SETUP (FIXED) ===
 BASE_DIR = Path(__file__).resolve().parent
