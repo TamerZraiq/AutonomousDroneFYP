@@ -1,53 +1,103 @@
+import subprocess
+import json
+import threading
+import time
+import numpy as np
+import cv2
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-import subprocess
 
 router = APIRouter()
 
+# Global shared detection buffer
+latest_detection = {"objects": [], "timestamp": 0}
+
+
+# ================================
+#   READ METADATA (Background)
+# ================================
+def read_ai_metadata(proc):
+    global latest_detection
+    for line in proc.stderr:
+        try:
+            packet = json.loads(line.decode("utf-8"))
+            if "objects" in packet:
+                latest_detection = {
+                    "objects": packet["objects"],
+                    "timestamp": time.time()
+                }
+        except:
+            continue
+
+
+# ================================
+#   FRAME GENERATOR
+# ================================
 def frame_generator():
-    cmd = [
-        "/usr/bin/rpicam-vid",
-        "-t", "0",                 # endless stream
-        "--codec", "mjpeg",
+
+    proc = subprocess.Popen([
+        "rpicam-vid",
+        "-t", "0",
         "--inline",
+        "--codec", "mjpeg",
         "--framerate", "15",
         "--width", "640",
         "--height", "480",
-        "-o", "-"                  # output to stdout
-    ]
+        "--post-process-file", "/usr/share/rpi-camera-assets/imx500_mobilenet_ssd.json",
+        "--metadata", "--metadata-format", "json",
+        "-o", "-"
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
-    boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+    # Start metadata thread
+    threading.Thread(target=read_ai_metadata, args=(proc,), daemon=True).start()
 
     buffer = b""
+    boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
 
-    try:
-        while True:
-            chunk = proc.stdout.read(4096)
+    while True:
+        chunk = proc.stdout.read(4096)
+        if not chunk:
+            break
+        buffer += chunk
 
-            if not chunk:
-                break
+        start = buffer.find(b"\xff\xd8")
+        end = buffer.find(b"\xff\xd9")
 
-            buffer += chunk
+        if start != -1 and end != -1:
+            jpg = buffer[start:end+2]
+            buffer = buffer[end+2:]
 
-            # JPEG images start with FFD8 and end with FFD9
-            start = buffer.find(b"\xff\xd8")
-            end = buffer.find(b"\xff\xd9")
+            frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
 
-            if start != -1 and end != -1:
-                jpeg = buffer[start:end + 2]
-                buffer = buffer[end + 2:]
+            # Draw detections
+            for obj in latest_detection["objects"]:
+                x = int(obj["x"] * frame.shape[1])
+                y = int(obj["y"] * frame.shape[0])
+                w = int(obj["width"] * frame.shape[1])
+                h = int(obj["height"] * frame.shape[0])
 
-                yield boundary + jpeg + b"\r\n"
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0,255,0), 2)
+                cv2.putText(frame, obj["class"], (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
 
-    finally:
-        proc.kill()
+            ok, encoded = cv2.imencode(".jpg", frame)
+            yield boundary + encoded.tobytes() + b"\r\n"
 
 
+# ================================
+#   STREAM ENDPOINT
+# ================================
 @router.get("/camera/stream")
 def stream():
     return StreamingResponse(
         frame_generator(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
+        media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+
+# ================================
+#   AI METADATA ENDPOINT
+# ================================
+@router.get("/camera/ai_metadata")
+def ai_metadata():
+    return latest_detection
