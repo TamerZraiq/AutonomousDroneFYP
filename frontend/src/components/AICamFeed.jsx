@@ -1,5 +1,5 @@
-export default function AICamFeed() {
-  const backendUrl = "http://172.20.10.3:8000/camera/stream"; 
+export default function AICamFeed() { 
+  const backendUrl = "/camera/stream"; 
 
   return (
     <div className="flex justify-center items-center w-full h-full">
