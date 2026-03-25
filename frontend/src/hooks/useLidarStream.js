@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 
 export function useLidarStream() {
   const [points, setPoints] = useState([]);
+  const [nearest, setNearest] = useState(null);
   const [status, setStatus] = useState("connecting");
 
   useEffect(() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.hostname}:8000/ws/lidar`);
+    const ws = new WebSocket(`${proto}://${location.host}/ws/lidar`);
     ws.onopen = () => console.log("✅ WebSocket connected");
     ws.onclose = (e) => console.log("❌ WebSocket closed", e);
     ws.onerror = (e) => console.error("⚠ WebSocket error", e);
@@ -17,6 +18,7 @@ export function useLidarStream() {
     ws.onmessage = (msg) => {
       const data = JSON.parse(msg.data);
       setPoints(data.x.map((x, i) => ({ x, y: data.y[i], c: data.c[i] })));
+      setNearest(data.nearest_distance);
       console.log("WS DATA:", data);
       if (data.too_close === true) {
         console.warn(`⚠ Object too close: ${Math.round(data.nearest_distance * 100)} cm`);
@@ -48,5 +50,5 @@ export function useLidarStream() {
     return () => ws.close();
   }, []);
 
-  return { points, status };
+  return { points, nearest, status };
 }
