@@ -41,11 +41,11 @@ lidar = LidarStreamer(max_points=3000)
 if not SIM_MODE:
     from backend.drone.controller import DroneController
     from backend.drone.state_machine import StateMachine
-    from backend.drone.router import router as drone_router, ws_router, set_controller
+    from backend.drone.router import router as drone_router, ws_router, set_dependencies
 
     ctrl = DroneController()
     sm   = StateMachine()
-    set_controller(ctrl, sm)
+    set_dependencies(ctrl, sm, lidar)
     app.include_router(drone_router)
     app.include_router(ws_router)
 

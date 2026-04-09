@@ -9,8 +9,9 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
-# Global shared detection buffer
+# Global shared state — read by task_executor for detections + frame capture
 latest_detection = {"objects": [], "timestamp": 0}
+latest_frame: bytes | None = None   # raw JPEG bytes of most recent frame
 
 
 # ================================
@@ -81,6 +82,9 @@ def frame_generator():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
 
             ok, encoded = cv2.imencode(".jpg", frame)
+            if ok:
+                global latest_frame
+                latest_frame = encoded.tobytes()
             yield boundary + encoded.tobytes() + b"\r\n"
 
 

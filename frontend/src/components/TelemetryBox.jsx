@@ -4,74 +4,57 @@ export default function TelemetryBox() {
   const { telem, status } = useTelemetryStream();
 
   const bat = telem.battery_pct;
-  const batColor = bat <= 0 ? "text-zinc-500"
-    : bat < 20 ? "text-red-400"
-    : bat < 40 ? "text-yellow-400"
-    : "text-green-400";
+  const batColor = bat <= 0  ? "#3a4e34"
+    : bat < 20               ? "#f87171"
+    : bat < 40               ? "#fbbf24"
+    :                          "#4ade80";
+
+  function Row({ label, value, color }) {
+    return (
+      <div className="flex justify-between items-center">
+        <span className="stat-label">{label}</span>
+        <span className="text-sm font-mono" style={{ color: color || "#d0dcc8" }}>{value}</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="text-sm space-y-1.5 font-mono">
+    <div className="space-y-2.5">
 
-      {/* FC connection */}
-      <div className="flex justify-between">
-        <span className="text-zinc-500">FC Link</span>
-        <span className={telem.connected ? "text-green-400" : "text-red-400"}>
-          {telem.connected ? "CONNECTED" : "OFFLINE"}
-        </span>
+      <Row label="FC Link"
+        value={telem.connected ? "Connected" : "Offline"}
+        color={telem.connected ? "#4ade80" : "#f87171"} />
+      <Row label="Telemetry"
+        value={status.toUpperCase()}
+        color={status === "live" ? "#4ade80" : "#fbbf24"} />
+
+      <div style={{ borderTop: "1px solid rgba(242,235,215,0.1)", margin: "4px 0" }} />
+
+      <Row label="State"    value={telem.state}       color="#d4d820" />
+      <Row label="Mode"     value={telem.flight_mode} />
+      <Row label="Armed"
+        value={telem.armed ? "Armed" : "Disarmed"}
+        color={telem.armed ? "#f87171" : "#3a4e34"} />
+
+      <div style={{ borderTop: "1px solid rgba(242,235,215,0.1)", margin: "4px 0" }} />
+
+      <Row label="Altitude" value={`${telem.rel_alt.toFixed(2)} m`} />
+      <Row label="Heading"  value={`${telem.heading_deg.toFixed(1)}°`} />
+
+      <div>
+        <span className="stat-label block mb-1.5">NED Position</span>
+        <div className="grid grid-cols-3 gap-1 text-xs font-mono" style={{ color: "#6b8a60" }}>
+          {[["N", telem.local_north], ["E", telem.local_east], ["D", telem.local_down]].map(([ax, val]) => (
+            <div key={ax} className="rounded px-2 py-1" style={{ background: "rgba(242,235,215,0.04)", border: "1px solid rgba(242,235,215,0.1)" }}>
+              <span style={{ color: "#3a4e34" }}>{ax} </span>{val.toFixed(2)}
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* WS status */}
-      <div className="flex justify-between">
-        <span className="text-zinc-500">WS</span>
-        <span className={status === "live" ? "text-green-400" : "text-yellow-400"}>
-          {status.toUpperCase()}
-        </span>
-      </div>
-
-      <hr className="border-zinc-700" />
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">State</span>
-        <span className="text-cyan-300">{telem.state}</span>
-      </div>
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">Mode</span>
-        <span className="text-zinc-200">{telem.flight_mode}</span>
-      </div>
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">Armed</span>
-        <span className={telem.armed ? "text-red-400 font-bold" : "text-zinc-400"}>
-          {telem.armed ? "ARMED" : "DISARMED"}
-        </span>
-      </div>
-
-      <hr className="border-zinc-700" />
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">Altitude</span>
-        <span className="text-zinc-200">{telem.rel_alt.toFixed(2)} m</span>
-      </div>
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">Heading</span>
-        <span className="text-zinc-200">{telem.heading_deg.toFixed(1)}°</span>
-      </div>
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">NED</span>
-        <span className="text-zinc-200">
-          {telem.local_north.toFixed(2)} / {telem.local_east.toFixed(2)} / {telem.local_down.toFixed(2)}
-        </span>
-      </div>
-
-      <div className="flex justify-between">
-        <span className="text-zinc-500">Battery</span>
-        <span className={batColor}>
-          {bat <= 0 ? "N/A" : `${bat.toFixed(0)}%`}
-        </span>
-      </div>
+      <Row label="Battery"
+        value={bat <= 0 ? "N/A" : `${bat.toFixed(0)}%`}
+        color={batColor} />
 
     </div>
   );

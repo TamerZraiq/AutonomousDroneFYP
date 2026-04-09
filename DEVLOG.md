@@ -254,71 +254,356 @@ TelemetryBox component
 
 ---
 
-## Project Context Briefing — 2026-03-25
+## Project State — as of 2026-03-25 end of session
 
-### What AeroDrop Is
-GPS-denied indoor autonomous search-and-rescue drone system. FYP capstone, deadline mid-April 2026. Operator builds a mission on a web UI; drone arms, takes off, flies a lawnmower search pattern using offboard NED control; LD06 LiDAR builds an occupancy map; IMX500 AI camera records detections. Full simulation stack (ArduCopter SITL + MAVProxy in WSL2 on laptop) was developed and tested end-to-end.
-
-### Hardware on This RPi (confirmed working)
+### Hardware confirmed working
 | Component | Interface | Status |
 |-----------|-----------|--------|
-| LD06 LiDAR | `/dev/ttyAMA0` @ 230400 baud | Working — live point cloud confirmed |
-| H7A3 FC MAVLink | `/dev/ttyAMA2` @ 115200 baud | Heartbeat confirmed |
-| IMX500 AI camera | `rpicam-vid` subprocess | Stream + metadata working |
-| Optical flow sensor | Not yet wired | Next hardware phase |
-| ToF rangefinder | Not yet wired | Next hardware phase |
+| LD06 LiDAR | `/dev/ttyAMA0` @ 230400 baud | ✅ Live point cloud on dashboard |
+| H7A3 FC MAVLink | `/dev/ttyAMA2` @ 115200 baud | ✅ Full telemetry pipeline confirmed |
+| IMX500 AI camera | `rpicam-vid` subprocess | ✅ Stream + metadata working |
+| Matek 3901-L0X (optical flow + ToF) | Not yet wired | ⬜ Next hardware phase |
 
-`dtoverlay=uart2` already in `/boot/firmware/config.txt`. H7A3 has `SERIAL2_PROTOCOL=2`, `SERIAL2_BAUD=115`. Do not touch these.
+`dtoverlay=uart2` in `/boot/firmware/config.txt`. H7A3 `SERIAL2_PROTOCOL=2`, `SERIAL2_BAUD=115`. Do not touch.
 
-### What Was Validated in SITL (laptop)
-- ARM → TAKEOFF → offboard lawnmower → obstacle stop (0.45 m) → auto-RTL → LAND
-- Scout / Locate / Deliver task types all working
-- Battery abort mid-mission, disarm watcher, occupancy map, telemetry stream (5 Hz), PDF/JSON export
+### What exists in this repo right now
+**Backend:**
+- `backend/main.py` — SIM_MODE flag, lidar always on, drone module loaded when `SIM_MODE=false`
+- `backend/app/lidar_streamer.py` — LD06 serial reader, ring buffer, snapshot()
+- `backend/app/camera_streamer.py` — rpicam-vid subprocess, MJPEG + AI metadata
+- `backend/drone/controller.py` — MAVSDK + pymavlink, 7 telemetry tasks, TelemetrySnapshot
+- `backend/drone/state_machine.py` — 7-state FSM
+- `backend/drone/router.py` — `/api/drone/status` + `/ws/telemetry`
+- `backend/drone/test_hitl.py` — smoke-test script
 
-### Critical Gap: This RPi Folder vs. Laptop Folder
-The laptop folder has the full stack. This RPi folder currently only has the basic LiDAR + camera backend. **The entire `backend/drone/` module does not exist here yet:**
-- `drone/controller.py` — MAVSDK + pymavlink wrapper, telemetry snapshot
-- `drone/state_machine.py` — 7-state FSM (IDLE/ARMED/TAKEOFF/MISSION/RTL/LANDED/EMERGENCY)
-- `drone/router.py` — all drone REST + WS endpoints, background watchers
-- `drone/offboard_executor.py` — NED setpoint loop at 10 Hz, obstacle stop at 0.45 m
-- `drone/task_executor.py` — Scout/Locate/Deliver → waypoint lists
-- `drone/mission.py` — MAVSDK GPS mission (not used indoors)
-- `drone/test_hitl.py` — smoke-test: connect → arm → takeoff → hover → land → disarm
-- `app/occupancy_grid.py` — 12 m × 12 m grid, 0.2 m/cell, heading rotation, Bresenham ray-cast
-- `app/detection_log.py` — thread-safe detection list with NED positions
-- `app/lidar_sim.py`, `app/detection_sim.py` — SITL only, not needed here
+**Still to build (not yet in this repo):**
+- `backend/drone/offboard_executor.py` — NED setpoint loop, obstacle stop
+- `backend/drone/task_executor.py` — Scout/Locate/Deliver task types
+- `backend/app/occupancy_grid.py` — 12 m × 12 m map, heading rotation, Bresenham
+- `backend/app/detection_log.py` — thread-safe detection list
+- Full frontend mission planning UI (Hero screen, MissionView, FlightControl, LaunchPanel, OccupancyMap, full TelemetryBox, Zustand stores, PDF/JSON export)
 
-Frontend on laptop also has the full mission planning + flight UI (Hero screen, MissionView, Zustand stores, all WS hooks with auto-reconnect, PDF/JSON export). This RPi currently has only the basic LiDAR/camera/telemetry placeholder frontend.
+### Python environment
+Venv: `~/pidrone/venv/`
+Installed: fastapi, uvicorn, pymavlink, mavsdk, MAVProxy, future, opencv-python-headless, pyserial, numpy
 
-### Hardware Bringup Order (next goals)
-1. Migrate full stack from laptop → this RPi folder
-2. Backend starts cleanly — no import errors, LidarStreamer starts, DroneController connects to FC via MAVProxy UDP
-3. LiDAR canvas and occupancy map working with real room data
-4. ARM → LAND cycle through UI on real FC
-5. Wire optical flow + ToF, set real driver params on H7A3 (`FLOW_TYPE`, `RNGFND1_TYPE`)
-6. EKF3 bench test (props off) — confirm `local_north/east` stable, `is_local_position_ok=True`
-7. GPS-denied hover — 1 m, 10 s, no drift
-8. Full SAR mission — Scout a clear room, export PDF report
-
-### Known Issues (from laptop development)
-- Obstacle avoidance is stop-only — no path-around logic
-- `camera_streamer.py` imports `cv2` at module level — `opencv-python-headless` must be installed or backend crashes on import
-- `battery_pct` may read 0 or 100 if H7A3 battery monitor unconfigured (`BATT_MONITOR=0`)
-- `MAVSDK_CONNECTION` must be UDP, not serial — MAVProxy must bridge first
-- TelemetryBox offline message says "start SITL" — cosmetic, should say "check hardware"
-
-### Python Environment
-Venv: `~/pidrone/mavenv/` (has pymavlink + pyserial). Also needs: `mavsdk`, `opencv-python-headless`.
-
-Hardware startup:
+### How to start the system
+Terminal 1 — MAVProxy bridge:
 ```bash
-cd ~/pidrone
-source mavenv/bin/activate
+source ~/pidrone/venv/bin/activate
+mavproxy.py --master=/dev/ttyAMA2 --baudrate=115200 \
+    --out=udpout:0.0.0.0:14552 --out=udpout:0.0.0.0:14553 --daemon
+```
+Terminal 2 — backend:
+```bash
+cd ~/pidrone && source venv/bin/activate
 export SIM_MODE=false
 export MAVSDK_CONNECTION="udpin://0.0.0.0:14552"
 export GUIDED_PORT=14553
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Or: `bash start_hardware.sh --backend`
+Access dashboard: `http://172.20.10.2:8000`
+
+Frontend build (after any frontend changes):
+```bash
+cd ~/pidrone/frontend && npm run build && cp -r dist/* ../backend/app/static/
+```
+
+### Known issues / gotchas
+- `is_armable=False`, `local_pos_ok=False` — expected until Matek 3901-L0X wired and FC params set
+- `battery_pct` shows N/A — `BATT_MONITOR=0` on H7A3, not configured
+- Obstacle avoidance (when built) will be stop-only — no path-around logic
+- `MAVSDK_CONNECTION` must be UDP — MAVProxy must be running first
+- Vite dev server hangs on Pi under load — always use production build for runtime
+
+### Hardware bringup checklist
+- [x] LiDAR canvas live in browser
+- [x] FC ↔ RPi MAVLink pipeline (MAVProxy + MAVSDK + pymavlink)
+- [x] Live telemetry on dashboard (flight mode, heading, armed, altitude)
+- [x] Matek 3901-L0X optical flow + ToF — confirmed working (opt_qua ~43, opt_m_x/y responsive, EK3_SRC1_POSZ=2)
+- [x] Motors 2/3/4 confirmed spinning via motor test (PWM 1400, MOT_PWM_TYPE=0)
+- [~] Motor 1 (S1 pad) FAULTY — pad/trace dead on FC, confirmed by ESC swap. Drone cannot fly yet.
+- [ ] EKF3 bench test — `local_pos_ok=True`, stable NED readings
+- [x] ARM / TAKEOFF / LAND / RTL / EMERGENCY / RESET endpoints built
+- [x] Occupancy grid built (20×20m dynamic, Bresenham ray-cast, heading rotation)
+- [x] `/ws/map` WebSocket at 2 Hz
+- [x] Detection log with NED position + JPEG frame capture
+- [x] Offboard executor (10 Hz NED setpoints, obstacle stop at 0.45m)
+- [x] Task executor (boustrophedon sweep, detection monitoring, map update)
+- [x] Full mission UI frontend (flight controls, mission config, occupancy map, LiDAR, camera tabs, detection list, PDF export)
+- [ ] Full SAR pipeline validated hand-held (EKF3 health, arm → mission → RTL)
+- [ ] Motor 1 fix → GPS-denied hover test
+- [ ] Full autonomous SAR mission with real flight + PDF export
+
+### Motor 1 fault — testing strategy
+S1 pad is dead (FC hardware fault). Motors 2/3/4 work. Drone cannot generate lift.
+Plan: validate entire SAR software pipeline hand-held. Person physically carries drone around room — optical flow sees real motion, LiDAR scans real environment, occupancy map builds with real heading rotation, camera runs AI detection. All software layers fully exercised without flight risk. Motor 1 fix required before actual autonomous hover/mission.
+
+---
+
+## Session 1 continued — Git / .gitignore cleanup
+
+### Problem
+VS Code Source Control showed "branch has no upstream" when trying to push. Root cause: `SCRUM-145-feature/RPiFCpipeline` was a new local branch never pushed to `origin`.
+
+MAVProxy runtime files were also staged for commit and should never be in the repo:
+- `mav.parm` — FC parameter dump downloaded by MAVProxy on connect
+- `mav.tlog` — binary telemetry log written continuously by MAVProxy
+- `mav.tlog.raw` — raw binary log
+- `--metadata-format` — stray file from rpicam-vid metadata output
+
+### Fix
+Added to root `.gitignore`:
+```
+mav.parm
+mav.tlog
+mav.tlog.raw
+mav*.tlog
+mav*.parm
+--metadata-format
+```
+Removed already-staged files with `git rm --cached`. Set upstream with `git push -u origin SCRUM-145-feature/RPiFCpipeline`.
+
+---
+
+## Session 2 — 2026-04-04
+
+### Hardware update received at session start
+- **Optical flow (Matek 3901-L0X):** Confirmed working — `opt_qua ~43`, `opt_m_x/y` responsive, `EK3_SRC1_POSZ=2` set on FC
+- **Motors 2/3/4:** Confirmed spinning via pymavlink `MAV_CMD_DO_MOTOR_TEST`, PWM 1400, `throttle_type=1`, `MOT_PWM_TYPE=0`
+- **Motor 1 (S1 pad):** Confirmed faulty — S1 pad or FC copper trace is dead. Isolated by swapping ESC signal wires. Drone cannot fly. Not fixed.
+- **Testing strategy:** Full SAR pipeline validated hand-held. Person carries drone around room. Software fully exercised without props.
+- **PDB issue (end of session):** PDB 5V rail not powering FC. FC powered via USB for continued testing. Optical flow may not be powered via USB depending on wiring. `local_pos_ok` may be False — drone marker won't track on map but all other pipeline components still testable.
+
+---
+
+### Full SAR Pipeline Implementation
+
+**Goal:** User types a target (e.g. "person"), hits START MISSION, drone autonomously sweeps the room, logs detections with NED positions and camera frames, auto-RTLs, user exports PDF.
+
+#### Philosophy change — occupancy grid
+Previous plan had a fixed 12×12m pre-defined room. Changed to a **dynamic discovery approach**: 20×20m canvas centred on takeoff origin (NED 0,0). No room size specified. Grid fills organically as LiDAR data arrives. The room maps itself.
+
+---
+
+#### Files created
+
+**`backend/app/occupancy_grid.py`**
+- 20×20m grid, 0.10m/cell resolution → 200×200 = 40,000 cells
+- Cell states: `FREE=0`, `OCCUPIED=1`, `UNKNOWN=2`
+- `update(drone_north, drone_east, heading_deg, body_frame_points)`: rotates body-frame LiDAR points to world frame using real IMU heading, then Bresenham ray-casts from drone position — marks ray path as FREE, endpoint as OCCUPIED
+- `add_detection(north, east)`: marks a detection position on the grid for rendering
+- `serialise()`: returns flat 1-D list + drone position + heading + detection markers for `/ws/map`
+- `reset()`: clears grid between missions
+- Thread-safe via `threading.Lock`
+
+**`backend/app/detection_log.py`**
+- `Detection` dataclass: `object_class`, `confidence`, `north`, `east`, `timestamp`, `frame_jpg` (raw JPEG bytes, optional)
+- `DetectionLog`: thread-safe list via `threading.Lock`
+- `add()`, `all()`, `as_dicts()` (no frame bytes — safe for JSON/WS), `clear()`
+
+**`backend/drone/offboard_executor.py`**
+- Sends `SET_POSITION_TARGET_LOCAL_NED` via pymavlink at 10 Hz
+- `LocalWaypoint` dataclass: `north`, `east`, `down=-1.2`, `yaw=0.0`
+- `OffboardStatus` dataclass: `active`, `paused`, `current_wp`, `total_wp`, `finished`, `blocked`
+- Obstacle stop: if LiDAR nearest < `OBSTACLE_STOP_M=0.45m`, holds current setpoint, sets `blocked=True`
+- Waypoint advance when within `WAYPOINT_RADIUS_M=0.30m`
+- `pause()` / `resume()` via `asyncio.Event`; `cancel()` sets cancel event and unblocks pause
+
+**`backend/drone/task_executor.py`**
+- `build_sweep_waypoints(row_length, rows, altitude)` → boustrophedon pattern:
+  - Even rows go North, odd rows go South, each shifted East by `ROW_SPACING_M=0.8m`
+  - Final waypoint returns to NED origin
+- `TaskExecutor.start()`: offsets waypoints by current NED position (so drone's current location is local origin), spawns `_run()` as asyncio task
+- Three parallel coroutines inside `_run()`:
+  1. `offboard_executor.run(waypoints)` — flies the sweep
+  2. `_monitor_detections()` — polls `camera_streamer.latest_detection` at 5 Hz, matches target class, logs NED + captures JPEG frame, marks grid
+  3. `_update_map()` — feeds LiDAR snapshot into occupancy grid at 5 Hz with current heading
+
+**`backend/drone/router.py`** — full rewrite, added:
+- REST: `POST /api/drone/arm`, `takeoff`, `land`, `rtl`, `emergency`, `reset`
+- REST: `POST /api/drone/task/start` (body: `{target, row_length, rows, altitude}`), `task/cancel`, `task/pause`, `task/resume`
+- REST: `POST /api/drone/detections/clear`
+- REST: `GET /api/drone/report/json` — returns all detections with `frame_b64` (base64 JPEG) for each detection that has a frame
+- WS: `/ws/telemetry` (5 Hz) — now includes `offboard{}` status + `detections[]`
+- WS: `/ws/map` (2 Hz) — full grid serialisation
+- `set_dependencies(ctrl, sm, lidar)` — injects all singletons, constructs `DetectionLog`, `OccupancyGrid`, `TaskExecutor`
+- `_watch_mission_end()` background task: polls offboard status, auto-triggers RTL when sweep finishes
+
+**`backend/app/camera_streamer.py`** — added:
+- `latest_frame: bytes | None` global — stores raw JPEG bytes of the most recent encoded frame
+- Updated in `frame_generator()` after each `cv2.imencode()` call
+- Used by `task_executor._monitor_detections()` for frame capture at detection moment
+
+**`backend/main.py`** — updated `set_controller` → `set_dependencies(ctrl, sm, lidar)` to pass lidar reference
+
+---
+
+#### Files created — frontend
+
+**`frontend/src/hooks/useMapStream.js`**
+- Connects to `/ws/map`, parses grid payload, 3s auto-reconnect, 8s stale watchdog
+- Returns `{ map, status }`
+
+**`frontend/src/components/OccupancyMap.jsx`**
+- Canvas 500×500px, `id="occupancy-canvas"` (read by PDF export)
+- Green = FREE, Red = OCCUPIED, dark = UNKNOWN
+- Yellow circles = detection markers
+- Cyan dot + white heading arrow = drone position + orientation
+- 1m scale bar bottom-left
+- "Save PNG" button → `canvas.toDataURL()` download
+
+**`frontend/src/App.jsx`** — full rewrite:
+- **Top bar:** FC link status, SM state, armed indicator
+- **Left sidebar:** flight controls (ARM/TAKEOFF/RTL/LAND/RESET/EMERGENCY), mission config form (target string, row length, rows, altitude, estimated coverage m²), START MISSION / PAUSE / RESUME / CANCEL, waypoint progress bar, Export PDF button + detection count
+- **Centre:** tab switcher — Occupancy Map / LiDAR / Camera
+- **Right sidebar:** TelemetryBox + detection list (class, confidence, NED position)
+- All flight buttons gated by SM state (disabled when invalid)
+- EMERGENCY always enabled
+- `exportPDF()`: lazy-imports jsPDF + autotable, renders map canvas as PNG, detection table, one page per detection frame
+
+**`frontend/src/index.css`** — added Tailwind component classes: `.btn-primary`, `.btn-secondary`, `.input`
+
+**`frontend/package.json`** — added `jspdf`, `jspdf-autotable`
+
+---
+
+#### `start.sh` created
+```bash
+./start.sh             # MAVProxy daemon (&) + backend (foreground)
+./start.sh --mavproxy  # MAVProxy foreground only
+./start.sh --backend   # backend only
+./start.sh --build     # npm run build + cp to static
+```
+- `--daemon` flag removed from combined mode (was blocking script before uvicorn started)
+
+---
+
+#### Sweep pattern example output (3m rows, 4 rows, 1.2m alt)
+```
+WP1: N3.0  E0.0  D-1.2   (row 0, going North)
+WP2: N0.0  E0.8  D-1.2   (row 1, going South)
+WP3: N3.0  E1.6  D-1.2   (row 2, going North)
+WP4: N0.0  E2.4  D-1.2   (row 3, going South)
+WP5: N0.0  E0.0  D-1.2   (return to origin)
+```
+
+---
+
+### Known limitations at end of session
+- Motor 1 / S1 pad fault — drone cannot fly, pipeline tested hand-held only
+- PDB 5V rail fault — FC running on USB, optical flow may be unpowered → `local_pos_ok=False` possible → drone marker won't track on occupancy map
+- Obstacle avoidance is stop-only (no path-around)
+- PDF camera frame pages are scaffolded but frames require `/api/drone/report/json` `frame_b64` field to render (not yet wired into PDF page image insertion)
+
+### Next
+- Validate pipeline hand-held: ARM → TAKEOFF → START MISSION → carry drone → RTL → Export PDF
+- Fix PDB 5V rail (Motor 1 fix + PDB) → real hover test
+- Wire PDF frame images into jsPDF pages
+
+---
+
+## Session 4 — 2026-04-09
+
+### Summary
+Drone armed and took off successfully (1.02A draw confirmed). Frontend data layout redesigned. Multiple bugs diagnosed and fixed: stale MAVProxy daemon processes, wrong UDP address in start.sh, takeoff command rejected by FC (result=4), SAR mission always blocked by false LiDAR obstacle readings from loose wiring/components. Decision made to properly mount all hardware on chassis before next flight test.
+
+---
+
+### Part 1 — Frontend Data Layout Redesign
+
+**New grid layout (6 cols × 3 rows):**
+- Col 1–2, Row 1: Telemetry
+- Col 1–2, Row 2: Camera Feed
+- Col 3–4, Rows 1–2: LiDAR (full height)
+- Col 5–6, Rows 1–2: Occupancy Map (full height)
+- Col 1–6, Row 3: Detections (full width, 100px)
+
+Used explicit CSS grid line syntax (`gridColumn: "3 / 5"` etc.) instead of `span`. Canvas `size` prop set to 460 for internal resolution. Canvas display scaled via `width: "100%"; height: "auto"; maxHeight: "100%"; aspectRatio: "1 / 1"` to fill box without stretching.
+
+**Files:** `frontend/src/App.jsx`, `frontend/src/components/LidarCanvas.jsx`, `frontend/src/components/OccupancyMap.jsx`
+
+---
+
+### Part 2 — start.sh: Stale MAVProxy Daemons + Wrong UDP Address
+
+**Symptom:** Intermittent — FC works but LiDAR/camera don't, or vice versa. FC arms briefly then disconnects.
+
+**Root causes:**
+1. Every `./start.sh` added a new `mavproxy.py --daemon` without killing the previous one. Multiple daemons compete for `/dev/ttyAMA2`; only one wins the serial port. Backend randomly connects to a dead instance.
+2. `--out=udpout:0.0.0.0:14552` sends to broadcast address — unreliable on Linux loopback. Should be `127.0.0.1`.
+3. `sleep 3` race condition — backend could start before MAVProxy had received its first heartbeat.
+
+**Fix:**
+- Added `pkill -f "mavproxy.py"` + `pkill -f "uvicorn backend.main"` at startup
+- Changed all `udpout:0.0.0.0` → `udpout:127.0.0.1`
+- Replaced `sleep 3` with a 15-second port-readiness poll on `:14552`
+
+**Note:** The port-check polls for a listening socket on 14552, which is actually MAVSDK's socket (not MAVProxy's outbound). Workaround: user starts MAVProxy via `./start.sh --mavproxy` then backend via `./start.sh --backend` separately. Both confirmed working.
+
+**Files:** `start.sh`
+
+---
+
+### Part 3 — Takeoff Rejected (result=4, MAV_RESULT_UNSUPPORTED)
+
+**Root cause:** Previous impl sent `MAV_CMD_NAV_TAKEOFF` via `command_long`. ArduCopter returns UNSUPPORTED (4) for this path. MAVSDK `action.takeoff()` also fails — it doesn't auto-switch ArduCopter to GUIDED mode.
+
+**Fix:** Replaced with NED setpoint climb:
+1. `pymavlink.set_mode(4)` → GUIDED mode
+2. Capture current NED position from snapshot
+3. Send `SET_POSITION_TARGET_LOCAL_NED` at `[north, east, -alt]` every 200ms
+4. Poll `rel_alt` until ≥ 85% of target or 20s timeout
+
+Same mechanism as offboard executor waypoints. **Confirmed working — drone reached ~1.0m.**
+
+**Files:** `backend/drone/controller.py`
+
+---
+
+### Part 4 — SAR Mission Permanently Blocked
+
+**Root cause 1:** `OBSTACLE_STOP_M = 0.45m` checked all 360°. Indoor walls always within 45cm somewhere.
+
+**Root cause 2:** Initial forward-arc fix had a coordinate frame bug — incorrectly transforming LiDAR body-frame points to world frame.
+
+**Fix:** Reduced threshold to 0.25m. Forward-arc check now in pure body frame: `point_angle = atan2(x, y)` (LiDAR frame: 0° = forward = y+). Block only if `|point_angle| < 60°`. Side/rear obstacles ignored.
+
+**Root cause 3 (physical):** Still blocked after code fix. Loose wires, ESC cables, connectors, and components within 25cm of LiDAR in the forward sector registered as solid obstacles.
+
+**Decision:** Mount all electronics on drone chassis (no props) before next test. Clears LiDAR scan plane and gives realistic sensor geometry.
+
+**Files:** `backend/drone/offboard_executor.py`
+
+---
+
+### Part 5 — Camera Feed Silent Failure
+
+`AICamFeed.jsx` had no error handling. If `rpicam-vid` fails, `<img>` shows nothing with no feedback.
+
+**Fix:** Added `status` state (`loading/ok/error`), `onError` handler, "Camera stream unavailable" message, and Retry button.
+
+**Files:** `frontend/src/components/AICamFeed.jsx`
+
+---
+
+### Hardware status end of session
+
+| Component | Status |
+|---|---|
+| H7A3 FC — Arm | ✅ Working |
+| Takeoff (NED setpoints) | ✅ Confirmed (~1.0m, 1.02A) |
+| LD06 LiDAR | ✅ Live |
+| Optical flow (Matek 3901-L0X) | ✅ EKF healthy |
+| IMX500 AI camera | ⚠️ Not confirmed this session |
+| Motor 1 replacement ESC | ⏳ Awaiting part |
+| SAR mission end-to-end | ⏳ Pending chassis mount |
+
+### Next
+1. Mount all electronics on chassis (no props)
+2. Confirm LiDAR scan plane clear with real mounting geometry
+3. Validate SAR mission hand-held: arm → takeoff → sweep → RTL
+4. Confirm camera stream working
+5. Motor 1 ESC replacement → first free-flight hover test
 
 ---

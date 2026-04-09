@@ -113,8 +113,27 @@ class DroneController:
         await self._drone.action.arm()
 
     async def takeoff(self, alt: float = 1.5):
-        await self._drone.action.set_takeoff_altitude(alt)
-        await self._drone.action.takeoff()
+        """Switch to GUIDED then climb via NED setpoints — works reliably with ArduCopter."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._set_guided_mode)
+        await asyncio.sleep(0.5)
+
+        snap = self.snapshot()
+        target_down = -alt  # NED: negative = above ground
+
+        deadline = loop.time() + 20.0
+        while loop.time() < deadline:
+            self.send_ned_setpoint(snap.local_north, snap.local_east, target_down)
+            await asyncio.sleep(0.2)
+            if self.snapshot().rel_alt >= alt * 0.85:
+                return
+        raise RuntimeError(f"Takeoff timed out — reached {self.snapshot().rel_alt:.2f} m of {alt:.1f} m")
+
+    def _set_guided_mode(self):
+        if self._mav is None:
+            raise RuntimeError("pymavlink not connected")
+        self._mav.set_mode(4)  # GUIDED = 4 for ArduCopter
+        time.sleep(0.3)
 
     async def land(self):
         await self._drone.action.land()
