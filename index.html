@@ -242,19 +242,18 @@
     <p class="sec-label">Overview</p>
     <h2>What the System Does</h2>
     <p class="body-text">
-      AeroDrop is a custom-built autonomous indoor quadcopter designed for GPS-denied search-and-rescue. A mission is launched entirely from a browser: the drone arms, takes off, sweeps a defined area in a lawnmower pattern while building a live LiDAR map, detects objects on the ground using an onboard AI camera, navigates to the detection, delivers a payload, then returns home. No manual input is required from launch to landing. The system runs on a Raspberry Pi 4 companion computer bridged to an ArduCopter 4.6.3 flight controller over MAVLink, with EKF3 providing position estimation through optical flow and time-of-flight altitude sensing rather than GPS.
+      AeroDrop is a custom-built autonomous indoor quadcopter designed for GPS-denied search-and-rescue. A mission is launched entirely from a browser: the drone arms, takes off, sweeps a defined area in a lawnmower pattern while building a live LiDAR map, detects objects on the ground using an onboard AI camera, and returns home automatically. No manual input is required from launch to landing. The system runs on a Raspberry Pi 4 companion computer bridged to an ArduCopter 4.6.3 flight controller over MAVLink, with EKF3 providing position estimation through optical flow and time-of-flight altitude sensing rather than GPS.
     </p>
     <div class="media-item">
       <img src="assets/fullweb.gif" alt="Entire Web walkthrough">
     </div>
-    
   </section>
 
   <section id="autonomy">
     <p class="sec-label">01 &middot; Flight Control</p>
     <h2>Autonomous State Machine</h2>
     <p class="body-text">
-      The flight brain is a Python state machine with eight states: IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, APPROACH, DELIVER, RTH, and LAND. An EMERGENCY state is reachable from anywhere in the graph. Every transition checks live telemetry before proceeding, so the drone will not advance to a state it cannot safely be in. Once a mission starts, no further input is needed.
+      The flight brain is a Python state machine with seven states: IDLE, ARMED, TAKEOFF, MISSION, RTL, LANDED, and EMERGENCY. EMERGENCY is reachable from any airborne state. Every transition checks live telemetry before proceeding, so the drone will not advance to a state it cannot safely be in. Once a mission starts, no further input is needed.
     </p>
     <div class="media-item">
       <img src="assets/telem.gif" alt="State machine advancing through a mission">
@@ -266,7 +265,7 @@
     <p class="sec-label">02 &middot; Environment Sensing</p>
     <h2>LiDAR Mapping and A* Pathfinding</h2>
     <p class="body-text">
-      The LD06 LiDAR streams 360-degree point cloud data at 10 Hz over serial. Each scan is ray-cast onto a 20 by 20 metre occupancy grid at 0.2 m per cell and pushed to the dashboard over WebSocket. The A* planner routes around occupied cells in real time. If any object enters within 0.45 m, the offboard executor holds position automatically until the path is clear.
+      The LD06 LiDAR streams 360-degree scan data at 10 Hz over serial. Each scan is ray-cast onto a 20 by 20 metre occupancy grid at 0.1 m per cell and pushed to the dashboard over WebSocket. The A* planner routes around occupied cells in real time. If any object enters within 0.25 m, the offboard executor holds position automatically until the path is clear.
     </p>
     <div class="two-col">
       <div class="media-item">
@@ -275,7 +274,7 @@
       </div>
       <div class="media-item">
         <img src="assets/occupancymap.gif" alt="Occupancy grid mid-scan">
-        <div class="media-cap">20x20 m &middot; 0.2 m/cell &middot; Bresenham ray-cast &middot; OccupancyMap.jsx</div>
+        <div class="media-cap">20x20 m &middot; 0.1 m/cell &middot; Bresenham ray-cast &middot; OccupancyMap.jsx</div>
       </div>
     </div>
   </section>
@@ -296,7 +295,7 @@
     <p class="sec-label">04 &middot; Onboard AI</p>
     <h2>IMX500 Detection Pipeline</h2>
     <p class="body-text">
-      The Sony IMX500 runs MobileNet SSD on the sensor's own neural processor, so inference never loads the RPi CPU. Each detection is stamped with NED coordinates derived from the drone's current pose and written to a thread-safe log. Detections appear as pins on the occupancy map. When a Locate task is active, the drone redirects to the first confirmed detection automatically.
+      The Sony IMX500 runs MobileNet SSD on the sensor's own neural processor, so inference never loads the RPi CPU. Each detection is stamped with NED coordinates derived from the drone's current pose and written to a thread-safe log. Detections appear as pins on the occupancy map.
     </p>
     <div class="two-col">
       <div class="media-item">
@@ -305,7 +304,7 @@
       </div>
       <div class="media-item">
         <img src="assets/occupancymapPing.png" alt="Detection pins on the occupancy map">
-        <div class="media-cap">DetectionLog &middot; NED stamp &middot; 0.5 m dedup &middot; OccupancyMap.jsx</div>
+        <div class="media-cap">DetectionLog &middot; NED stamp &middot; OccupancyMap.jsx</div>
       </div>
     </div>
   </section>
@@ -314,7 +313,7 @@
     <p class="sec-label">05 &middot; Physical Build</p>
     <h2>Hardware Integration</h2>
     <p class="body-text">
-      All compute runs on a Raspberry Pi 4 bridged to a Matek H7A3-Slim flight controller over UART via MAVProxy. EKF3 fuses optical flow from a Matek 3901-L0X and time-of-flight altitude for GPS-denied position hold. The LD06 LiDAR and IMX500 camera each connect on their own serial interfaces.
+      All compute runs on a Raspberry Pi 4 bridged to a Matek H7A3-Slim flight controller over UART via MAVProxy. EKF3 fuses optical flow from a Matek 3901-L0X and time-of-flight altitude for GPS-denied position hold. The LD06 LiDAR connects over UART, the IMX500 over CSI.
     </p>
     <div class="two-col">
       <div class="media-item">
@@ -345,12 +344,13 @@
         <img src="assets/det2.png" alt="Generated PDF, full page view">
         <div class="media-cap">jsPDF &middot; client-side export &middot; App.jsx</div>
       </div>
+    </div>
   </section>
 
   <footer>
     <p>Tamer Zraiq &nbsp;&middot;&nbsp; G00425053 &nbsp;&middot;&nbsp; BEng (Hons) Software &amp; Electronic Engineering</p>
     <p>Atlantic Technological University &nbsp;&middot;&nbsp; 2025/26</p>
-    <p>Supervisor: Paul Lennon &nbsp;&middot;&nbsp; Industry Advisor: Dan Moss, Manna Aero</p>
+    <p>Supervisor: Paul Lennon</p>
   </footer>
 
 </div>
