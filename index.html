@@ -263,13 +263,8 @@
       The flight brain is a Python state machine with eight states: IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, APPROACH, DELIVER, RTH, and LAND. An EMERGENCY state is reachable from anywhere in the graph. Every transition checks live telemetry before proceeding, so the drone will not advance to a state it cannot safely be in. Once a mission starts, no further input is needed.
     </p>
     <div class="media-item">
-      <div class="placeholder tall">
-        <span class="ph-badge">Video or screen recording</span>
-        <p class="ph-text">
-          <strong>State machine advancing through a mission</strong>
-          Dashboard screen recording as the drone arms and takes off. The state indicator in TelemetryBox should visibly step through IDLE, PREFLIGHT, TAKEOFF, NAVIGATE. Terminal output alongside works well here.
-        </p>
-      </div>
+      <img src="assets/telem.gif" alt="State machine advancing through a mission">
+      <div class="media-cap">LD06 &middot; /ws/lidar &middot; LidarCanvas.jsx</div>
       <div class="media-cap">state_machine.py &middot; pymavlink &middot; 5 Hz telemetry</div>
     </div>
   </section>
