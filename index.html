@@ -282,7 +282,6 @@
       </div>
       <div class="media-item">
         <img src="assets/occupancymap.gif" alt="Occupancy grid mid-scan">
-        <div class="media-cap">LD06 &middot; /ws/lidar &middot; LidarCanvas.jsx</div>
         <div class="media-cap">20x20 m &middot; 0.2 m/cell &middot; Bresenham ray-cast &middot; OccupancyMap.jsx</div>
       </div>
     </div>
@@ -295,36 +294,8 @@
       A React web dashboard gives full real-time visibility into the mission. Three WebSocket streams run at once: telemetry at 5 Hz, map at 2 Hz, and LiDAR at 10 Hz. Controls are state-gated, meaning you cannot arm if sensors are not ready, and you cannot issue a goto command unless the drone is already airborne.
     </p>
     <div class="media-item">
-      <div class="placeholder tall">
-        <span class="ph-badge">Screenshot</span>
-        <p class="ph-text">
-          <strong>Full dashboard during an active mission</strong>
-          Full-width screenshot of MissionView. Should show the FlightControl panel, occupancy map, AICamFeed, and TelemetryBox with actual live readings rather than zeros.
-        </p>
-      </div>
+      <img src="assets/dashboard.gif" alt="Full dashboard during an active mission">
       <div class="media-cap">React 19 &middot; Vite &middot; FastAPI &middot; App.jsx</div>
-    </div>
-    <div class="two-col">
-      <div class="media-item">
-        <div class="placeholder short">
-          <span class="ph-badge">Screenshot</span>
-          <p class="ph-text">
-            <strong>TelemetryBox with live data</strong>
-            Close-up showing state, altitude, and battery during flight.
-          </p>
-        </div>
-        <div class="media-cap">TelemetryBox.jsx &middot; useTelemetryStream.js</div>
-      </div>
-      <div class="media-item">
-        <div class="placeholder short">
-          <span class="ph-badge">Screenshot</span>
-          <p class="ph-text">
-            <strong>Task queue loaded before launch</strong>
-            Hero view with Scout / Locate / Deliver tasks configured and queued.
-          </p>
-        </div>
-        <div class="media-cap">taskStore.js &middot; Zustand &middot; LaunchPanel.jsx</div>
-      </div>
     </div>
   </section>
 
