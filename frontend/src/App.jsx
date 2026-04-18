@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLidarStream }     from "./hooks/useLidarStream";
 import { useTelemetryStream } from "./hooks/useTelemetryStream";
 import { useMapStream }       from "./hooks/useMapStream";
@@ -22,22 +22,34 @@ async function exportPDF(detections) {
   const { default: autoTable } = await import("jspdf-autotable");
   const doc = new jsPDF();
   const now = new Date().toLocaleString();
+
+  // Fetch full report (includes frame_b64 per detection)
+  let reportDetections = detections;
+  try {
+    const report = await api("/api/drone/report/json");
+    if (report.detections?.length > 0) reportDetections = report.detections;
+  } catch { /* fall back to WS detections */ }
+
   doc.setFontSize(22); doc.setTextColor(30, 30, 30);
   doc.text("AeroDrop SAR Mission Report", 14, 22);
   doc.setFontSize(10); doc.setTextColor(120);
   doc.text(`Generated: ${now}`, 14, 30);
+
+  // Occupancy map snapshot
   const canvas = document.getElementById("occupancy-canvas");
   if (canvas) {
     doc.setFontSize(13); doc.setTextColor(30);
     doc.text("Occupancy Map", 14, 44);
     doc.addImage(canvas.toDataURL("image/png"), "PNG", 14, 48, 100, 100);
   }
+
+  // Detections summary table
   doc.setFontSize(13); doc.setTextColor(30);
   doc.text("Detections", 14, 162);
   autoTable(doc, {
     startY: 167,
     head: [["#", "Object", "Confidence", "North (m)", "East (m)", "Time"]],
-    body: detections.map((d, i) => [
+    body: reportDetections.map((d, i) => [
       i + 1, d.object_class,
       `${(d.confidence * 100).toFixed(1)}%`,
       d.north.toFixed(2), d.east.toFixed(2),
@@ -45,6 +57,21 @@ async function exportPDF(detections) {
     ]),
     theme: "grid",
   });
+
+  // One page per detection that has a camera frame
+  reportDetections.forEach((d, i) => {
+    if (!d.frame_b64) return;
+    doc.addPage();
+    doc.setFontSize(15); doc.setTextColor(30);
+    doc.text(`Detection ${i + 1} — ${d.object_class}`, 14, 20);
+    doc.setFontSize(10); doc.setTextColor(80);
+    doc.text(
+      `Confidence: ${(d.confidence * 100).toFixed(1)}%  |  N ${d.north.toFixed(2)} m  E ${d.east.toFixed(2)} m  |  ${new Date(d.timestamp * 1000).toLocaleTimeString()}`,
+      14, 28,
+    );
+    doc.addImage(`data:image/jpeg;base64,${d.frame_b64}`, "JPEG", 14, 35, 182, 136);
+  });
+
   doc.save(`aerodrop_report_${Date.now()}.pdf`);
 }
 
@@ -71,6 +98,39 @@ export default function App() {
   const [altitude,  setAltitude]  = useState(1.2);
   const [busy,      setBusy]      = useState(false);
   const [cmdError,  setCmdError]  = useState(null);
+  const [detectionFrames, setDetectionFrames] = useState({});
+  const [scanRunning, setScanRunning] = useState(false);
+
+  const detectionCount = telem.detections?.length ?? 0;
+  useEffect(() => {
+    if (detectionCount === 0) { setDetectionFrames({}); return; }
+    api("/api/drone/report/json").then(data => {
+      const frames = {};
+      (data.detections || []).forEach((d, i) => { if (d.frame_b64) frames[i] = d.frame_b64; });
+      setDetectionFrames(frames);
+    }).catch(() => {});
+  }, [detectionCount]);
+
+  // Poll scan status so the button reflects reality after page reload
+  useEffect(() => {
+    const id = setInterval(() => {
+      api("/api/demo/scan/status").then(d => setScanRunning(!!d.running)).catch(() => {});
+    }, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function toggleScan() {
+    setBusy(true); setCmdError(null);
+    try {
+      if (scanRunning) {
+        await api("/api/demo/scan/stop", "POST");
+        setScanRunning(false);
+      } else {
+        await api("/api/demo/scan/start", "POST", { target });
+        setScanRunning(true);
+      }
+    } catch (e) { setCmdError(e.message); } finally { setBusy(false); }
+  }
 
   const isConnected = telem.connected;
   const isAirborne  = ["TAKEOFF", "MISSION", "RTL"].includes(telem.state);
@@ -286,6 +346,13 @@ export default function App() {
                 <span className="opacity-50 text-xs ml-2">→ {altitude.toFixed(1)} m</span>
               </button>
 
+              <button onClick={() => cmd("/api/drone/motor_test", { motor: 0, throttle: 10, duration: 3 })}
+                disabled={busy || !isConnected}
+                className="btn-secondary w-full py-2"
+                style={{ fontSize: "0.8rem", opacity: 0.8 }}>
+                Motor Test (all, 10%, 3 s)
+              </button>
+
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={() => cmd("/api/drone/rtl")}
                   disabled={busy || !isAirborne}
@@ -344,6 +411,66 @@ export default function App() {
             </div>
           </div>
 
+          {/* ── Demo Controls ──────────────────────────────────────────── */}
+          <div className="card p-6 mt-6">
+            <div className="flex items-center gap-3 mb-5">
+              <h3 className="font-semibold text-white text-lg">Demo Mode</h3>
+              <span className="text-xs px-2 py-0.5 rounded font-mono"
+                    style={{ background: "#1a2b10", color: "#d4d820", border: "1px solid #2a4a18" }}>
+                no-fly
+              </span>
+              <span className="text-xs" style={{ color: "#3a4e34" }}>
+                Uses real LiDAR + real camera AI — no flight required
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              {/* Live scan */}
+              <div className="flex items-center gap-4 p-4 rounded-xl"
+                   style={{ background: PANEL_BG, border: `1px solid ${PANEL_BORDER}` }}>
+                <div className="flex items-center gap-2 flex-1">
+                  <span className={`w-2 h-2 rounded-full ${scanRunning ? "bg-green-400 animate-pulse" : "bg-gray-600"}`} />
+                  <span className="text-sm font-mono" style={{ color: scanRunning ? "#4ade80" : "#5a7252" }}>
+                    {scanRunning ? "Scanning — LiDAR mapping + camera detection active" : "Scan stopped"}
+                  </span>
+                </div>
+                <button onClick={toggleScan} disabled={busy}
+                  className={scanRunning ? "btn-secondary text-sm px-4 py-2" : "btn-primary text-sm px-4 py-2"}>
+                  {scanRunning ? "Stop Scan" : "Start Live Scan"}
+                </button>
+                <button onClick={() => cmd("/api/demo/capture", "POST")} disabled={busy}
+                  className="btn-secondary text-sm px-4 py-2">
+                  Capture Frame
+                </button>
+                <button onClick={() => cmd("/api/drone/detections/clear")} disabled={busy}
+                  className="btn-ghost text-xs px-3 py-2">
+                  Clear
+                </button>
+              </div>
+
+              {/* Force state machine */}
+              <div>
+                <p className="stat-label mb-2">Force State Machine (for recording)</p>
+                <div className="flex flex-wrap gap-2">
+                  {["IDLE","ARMED","TAKEOFF","MISSION","RTL","LANDED","EMERGENCY"].map(s => (
+                    <button key={s}
+                      onClick={() => cmd(`/api/demo/state/${s}`)}
+                      disabled={busy}
+                      className="px-3 py-1 text-xs font-mono rounded-lg transition-colors disabled:opacity-40"
+                      style={{
+                        background: telem.state === s ? "#1a3a10" : PANEL_BG,
+                        border: `1px solid ${telem.state === s ? "#2a6a18" : PANEL_BORDER}`,
+                        color: telem.state === s ? "#d4d820" : "#c8d8c0",
+                      }}
+                      onMouseEnter={e => { if (telem.state !== s) e.currentTarget.style.background = "#1e2b1a"; }}
+                      onMouseLeave={e => { if (telem.state !== s) e.currentTarget.style.background = PANEL_BG; }}
+                    >{s}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-14 flex justify-center">
             <button onClick={() => scrollTo(dataRef)}
               className="flex flex-col items-center gap-2 text-xs tracking-widest uppercase transition-colors"
@@ -387,8 +514,8 @@ export default function App() {
               )}
             </div>
           </div>
-          <button onClick={() => exportPDF(detections)} disabled={detections.length === 0}
-            className="btn-secondary text-xs disabled:opacity-30">
+          <button onClick={() => exportPDF(detections)}
+            className="btn-secondary text-xs">
             Export PDF
           </button>
         </div>
@@ -446,17 +573,27 @@ export default function App() {
             ) : (
               <div className="flex gap-3 overflow-x-auto pb-1">
                 {detections.map((d, i) => (
-                  <div key={i} className="shrink-0 rounded-lg p-3 min-w-32"
-                       style={{ background: PANEL_BG, border: `1px solid ${PANEL_BORDER}` }}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-sm capitalize" style={{ color: "#d4d820" }}>{d.object_class}</span>
-                      <span className="text-xs font-mono" style={{ color: "#6b8a60" }}>{(d.confidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="text-xs font-mono leading-relaxed" style={{ color: "#5a7252" }}>
-                      N {d.north.toFixed(2)}<br />E {d.east.toFixed(2)}
-                    </div>
-                    <div className="text-xs mt-1" style={{ color: "#3a4e34" }}>
-                      {new Date(d.timestamp * 1000).toLocaleTimeString()}
+                  <div key={i} className="shrink-0 rounded-lg overflow-hidden"
+                       style={{ background: PANEL_BG, border: `1px solid ${PANEL_BORDER}`, minWidth: detectionFrames[i] ? 140 : 128 }}>
+                    {detectionFrames[i] && (
+                      <img
+                        src={`data:image/jpeg;base64,${detectionFrames[i]}`}
+                        alt={d.object_class}
+                        className="w-full object-cover"
+                        style={{ height: 80 }}
+                      />
+                    )}
+                    <div className="p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-sm capitalize" style={{ color: "#d4d820" }}>{d.object_class}</span>
+                        <span className="text-xs font-mono" style={{ color: "#6b8a60" }}>{(d.confidence * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="text-xs font-mono leading-relaxed" style={{ color: "#5a7252" }}>
+                        N {d.north.toFixed(2)}<br />E {d.east.toFixed(2)}
+                      </div>
+                      <div className="text-xs mt-1" style={{ color: "#3a4e34" }}>
+                        {new Date(d.timestamp * 1000).toLocaleTimeString()}
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -112,8 +112,26 @@ class DroneController:
     async def arm(self):
         await self._drone.action.arm()
 
+    async def _wait_for_local_position(self, timeout: float = 20.0):
+        """Block until EKF reports a valid local position estimate, or raise on timeout."""
+        async def _check():
+            async for health in self._drone.telemetry.health():
+                if health.is_local_position_ok:
+                    return
+        try:
+            await asyncio.wait_for(_check(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"Takeoff aborted — no local position estimate after {timeout:.0f} s. "
+                "Check optical flow sensor and rangefinder are connected and producing data."
+            )
+
     async def takeoff(self, alt: float = 1.5):
-        """Switch to GUIDED then climb via NED setpoints — works reliably with ArduCopter."""
+        """Wait for EKF position, switch to GUIDED, then climb via NED setpoints."""
+        print("[DroneController] Waiting for EKF local position estimate...")
+        await self._wait_for_local_position(timeout=20.0)
+        print("[DroneController] Position OK — switching to GUIDED")
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._set_guided_mode)
         await asyncio.sleep(0.5)
@@ -133,7 +151,16 @@ class DroneController:
         if self._mav is None:
             raise RuntimeError("pymavlink not connected")
         self._mav.set_mode(4)  # GUIDED = 4 for ArduCopter
-        time.sleep(0.3)
+        # Verify mode was accepted — ArduCopter rejects GUIDED without a position estimate
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            msg = self._mav.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)
+            if msg and msg.custom_mode == 4:
+                return
+        raise RuntimeError(
+            "Mode change to GUIDED failed — ArduCopter requires a position estimate. "
+            "Check GPS lock or optical flow / rangefinder configuration."
+        )
 
     async def land(self):
         await self._drone.action.land()
@@ -143,6 +170,28 @@ class DroneController:
 
     async def disarm(self):
         await self._drone.action.disarm()
+
+    # ── motor test (pymavlink) ───────────────────────────────────────────────
+
+    def motor_test(self, motor: int, throttle_pct: float, duration: float = 2.0):
+        """
+        Spin one motor via MAV_CMD_DO_MOTOR_TEST (no arming required).
+        motor: 1-4 (ArduCopter motor numbering)
+        throttle_pct: 0-100
+        duration: seconds to spin
+        """
+        if self._mav is None:
+            raise RuntimeError("pymavlink not connected")
+        self._mav.mav.command_long_send(
+            1, 1,  # target system, target component
+            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+            0,             # confirmation
+            motor,         # param1: motor number (1-based)
+            0,             # param2: throttle type 0 = percent
+            throttle_pct,  # param3: throttle %
+            duration,      # param4: timeout seconds
+            0, 0, 0,
+        )
 
     # ── NED setpoint (pymavlink) ──────────────────────────────────────────────
 

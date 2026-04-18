@@ -1,5 +1,0 @@
-body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-.row { display: flex; gap: 20px; align-items: flex-start; }
-canvas { border: 1px solid #ccc; background: #111; }
-.panel { min-width: 180px; }
-#status { margin-bottom: 8px; }

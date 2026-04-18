@@ -607,3 +607,38 @@ Same mechanism as offboard executor waypoints. **Confirmed working — drone rea
 5. Motor 1 ESC replacement → first free-flight hover test
 
 ---
+
+## Session — 2026-04-18
+
+### Issue: Armed drone (PSU) → brownout twice
+Arming worked but both arm and takeoff triggered PSU current limit fold-back.
+Motors ramp up in GUIDED/armed state pulls more than PSU can source.
+Bench PSU is incompatible with real motor testing — need LiPo for any armed/flight tests.
+
+### Added: Demo Mode (no-fly results pipeline)
+**Problem**: Need results screenshots/video/PDF export without flying.
+
+**Solution**: Added `backend/drone/demo_router.py` with:
+- `POST /api/demo/scan/start` — starts background coroutine using REAL LiDAR → occupancy grid + REAL camera AI detections → detection log (same logic as TaskExecutor._monitor_detections + _update_map, but stationary at NED origin)
+- `POST /api/demo/scan/stop` — stops it
+- `POST /api/demo/state/{STATE}` — forces state machine to any state (for recording state transitions)
+
+**Frontend**:
+- Demo Mode card added below Flight Control in Mission Setup
+- "Start Live Scan" button + live indicator (pulses green while running)
+- State machine force buttons (highlights current state)
+- Detection cards now show camera frame thumbnail when available
+- Export PDF now fetches `/api/drone/report/json` (includes `frame_b64`) and adds one page per detection with full camera frame
+
+**Workflow for results**:
+1. Start backend → open browser → scroll to Demo Mode
+2. Click **Start Live Scan** → LiDAR builds real room map, camera AI logs real person detections with frame snapshots
+3. Walk in front of camera with person to get detections
+4. Click state buttons IDLE→ARMED→TAKEOFF→MISSION→RTL→LANDED while recording telemetry box
+5. Click **Export PDF** → report with occupancy map + detection table + per-detection camera frames
+
+### Still needed
+- Frontend rebuild (node not on Pi — build on laptop with `./start.sh --build`)
+- LiPo or higher-current PSU for motor/flight testing
+- Motor 1 ESC replacement
+
