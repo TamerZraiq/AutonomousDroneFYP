@@ -245,15 +245,9 @@
       AeroDrop is a custom-built autonomous indoor quadcopter designed for GPS-denied search-and-rescue. A mission is launched entirely from a browser: the drone arms, takes off, sweeps a defined area in a lawnmower pattern while building a live LiDAR map, detects objects on the ground using an onboard AI camera, navigates to the detection, delivers a payload, then returns home. No manual input is required from launch to landing. The system runs on a Raspberry Pi 4 companion computer bridged to an ArduCopter 4.6.3 flight controller over MAVLink, with EKF3 providing position estimation through optical flow and time-of-flight altitude sensing rather than GPS.
     </p>
     <div class="media-item">
-      <div class="placeholder tall">
-        <span class="ph-badge">Video</span>
-        <p class="ph-text">
-          <strong>Full mission run or best available combined clip</strong>
-          The closest thing you have to a complete run. If you only have fragments, string together: arm and takeoff, the scan pattern in progress, a detection being logged, and landing. Even 60 seconds covering two or three of these steps tells the story.
-        </p>
-      </div>
-      <div class="media-cap">End-to-end mission: arm, scan, detect, deliver, RTH</div>
+      <img src="assets/fullweb.gif" alt="Entire Web walkthrough">
     </div>
+    
   </section>
 
   <section id="autonomy">
@@ -264,7 +258,6 @@
     </p>
     <div class="media-item">
       <img src="assets/telem.gif" alt="State machine advancing through a mission">
-      <div class="media-cap">LD06 &middot; /ws/lidar &middot; LidarCanvas.jsx</div>
       <div class="media-cap">state_machine.py &middot; pymavlink &middot; 5 Hz telemetry</div>
     </div>
   </section>
