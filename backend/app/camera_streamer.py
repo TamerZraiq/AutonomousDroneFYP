@@ -57,7 +57,7 @@ def _camera_loop():
             while True:
                 req = picam2.capture_request()
                 try:
-                    frame_rgb = req.make_array("main")
+                    frame_bgr = req.make_array("main")  # picamera2 RGB888 = BGR in memory
                     metadata  = req.get_metadata()
 
                     np_outputs = imx500.get_outputs(metadata, add_batch=True)
@@ -66,7 +66,6 @@ def _camera_loop():
                         if objects:
                             latest_detection = {"objects": objects, "timestamp": time.time()}
 
-                    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                     for obj in latest_detection.get("objects", []):
                         _draw(frame_bgr, obj)
 

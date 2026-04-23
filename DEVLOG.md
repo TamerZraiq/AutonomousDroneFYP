@@ -608,37 +608,235 @@ Same mechanism as offboard executor waypoints. **Confirmed working — drone rea
 
 ---
 
-## Session — 2026-04-18
+## Session 5 — 2026-04-18
 
-### Issue: Armed drone (PSU) → brownout twice
-Arming worked but both arm and takeoff triggered PSU current limit fold-back.
-Motors ramp up in GUIDED/armed state pulls more than PSU can source.
-Bench PSU is incompatible with real motor testing — need LiPo for any armed/flight tests.
+### Part 1 — Motor 1 ESC replaced, PSU brownout on arm/takeoff
 
-### Added: Demo Mode (no-fly results pipeline)
-**Problem**: Need results screenshots/video/PDF export without flying.
+Motor 1 ESC replaced. All 4 motors confirmed spinning via Mission Planner motor test and via the website ARM button (PSU powered). Two brownout events observed:
+1. Takeoff attempt → PSU hit current limit → FC lost power → disarmed
+2. Re-arm → held for a few seconds → same brownout
 
-**Solution**: Added `backend/drone/demo_router.py` with:
-- `POST /api/demo/scan/start` — starts background coroutine using REAL LiDAR → occupancy grid + REAL camera AI detections → detection log (same logic as TaskExecutor._monitor_detections + _update_map, but stationary at NED origin)
-- `POST /api/demo/scan/stop` — stops it
-- `POST /api/demo/state/{STATE}` — forces state machine to any state (for recording state transitions)
+**Root cause:** Bench PSU cannot deliver peak current during motor ramp-up (10–20A). FC/RPi brownout triggers ArduCopter disarm. PSU is fine for idle/bench work only.
 
-**Frontend**:
-- Demo Mode card added below Flight Control in Mission Setup
-- "Start Live Scan" button + live indicator (pulses green while running)
-- State machine force buttons (highlights current state)
-- Detection cards now show camera frame thumbnail when available
-- Export PDF now fetches `/api/drone/report/json` (includes `frame_b64`) and adds one page per detection with full camera frame
+**Fix:** Use LiPo battery for all armed/flight tests. No code changes needed.
 
-**Workflow for results**:
-1. Start backend → open browser → scroll to Demo Mode
-2. Click **Start Live Scan** → LiDAR builds real room map, camera AI logs real person detections with frame snapshots
-3. Walk in front of camera with person to get detections
-4. Click state buttons IDLE→ARMED→TAKEOFF→MISSION→RTL→LANDED while recording telemetry box
-5. Click **Export PDF** → report with occupancy map + detection table + per-detection camera frames
+**Next step:** Battery arm test (no props) → idle all 4 motors → throttle-up stress test → props + tethered hover.
 
-### Still needed
-- Frontend rebuild (node not on Pi — build on laptop with `./start.sh --build`)
-- LiPo or higher-current PSU for motor/flight testing
-- Motor 1 ESC replacement
+---
+
+### Part 2 — Camera AI detection pipeline completely broken
+
+**Symptom:** Detection cards on data screen empty. Occupancy map no pings. PDF export empty. Camera feed showed no bounding boxes.
+
+**Root cause chain (three bugs):**
+
+**Bug 1 — rpicam-vid metadata goes to stdout, not stderr.**
+`camera_streamer.py` used `rpicam-vid --metadata --metadata-format json -o -`. The `-o -` sends MJPEG to stdout. `--metadata` (without a filename) also routes to stdout in this rpicam-apps version — mixing metadata JSON with the MJPEG binary stream. The `_read_metadata` thread read from stderr, which only ever received shutdown signals. `latest_detection` stayed `{"objects": [], "timestamp": 0}` forever.
+
+**Diagnosis:** Added `print(f"[rpicam-vid RAW] {text}")` to the stderr reader — zero output during normal operation, only `Received signal 2` on Ctrl+C. Confirmed no metadata was arriving via stderr.
+
+**Fix:** Rewrote `camera_streamer.py` to use **picamera2 + IMX500 Python API** instead of `rpicam-vid` subprocess:
+- `IMX500("/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")` loads the SSD model
+- `picam2.capture_request()` → `req.get_metadata()` → `imx500.get_outputs(metadata, add_batch=True)` extracts boxes/scores/classes directly
+- Draws bounding boxes with cv2, encodes to JPEG for MJPEG stream
+- Embedded COCO 80-class label list (no external file needed)
+- Detection threshold 0.3 for drawing, >0.5 for logging
+
+**Dependency issue:** picamera2 is a system package (`/usr/lib/python3/dist-packages`), not in the venv. venv has cv2 but system Python doesn't. Fixed by appending `/usr/lib/python3/dist-packages` to `sys.path` at import time so picamera2 is importable from within the venv while cv2 resolves from the venv.
+
+**Bug 2 — Python global variable scope in nested function (pre-existing).**
+Original `_read_metadata` (nested inside `_camera_loop`) assigned `latest_detection = {...}` without `global latest_detection`. Python created a local variable, silently discarding every detection. Fixed in the old code too (added `global latest_detection` to nested function), but this was superseded by the picamera2 rewrite.
+
+**Bug 3 — `time` not imported in demo_router.py.**
+Added cooldown logic using `time.time()` but `import time` was missing from `demo_router.py`. `_live_scan` crashed with `NameError: name 'time' is not defined` on every scan start, silently (asyncio task exception). Fixed by adding `import time`.
+
+**Confirmed working:** `[Demo] AI detection: person 0.68` logging at 5s cooldown, detection cards populating on data screen, occupancy map yellow ring on drone position.
+
+---
+
+### Part 3 — Occupancy map detection marker hidden under drone dot
+
+**Symptom:** Detections logged in backend but no yellow dot visible on occupancy map.
+
+**Root cause:** Detection markers (yellow, radius 6px) were drawn BEFORE the drone dot (blue, radius 7px) in `OccupancyMap.jsx`. Since demo mode places drone at NED origin (100, 100 in grid) and detections also at NED origin, the blue drone dot covered the yellow marker completely.
+
+**Fix:**
+- Moved detection rendering AFTER drone dot
+- Changed to a double-ring style: filled yellow circle (r=6) + white outline ring (r=9) so it's visible against any background and clearly distinct from the drone dot
+
+**Files:** `frontend/src/components/OccupancyMap.jsx`
+
+---
+
+### Part 4 — Detection log spam
+
+**Symptom:** Hundreds of detection entries accumulating per minute (one per unique camera frame timestamp at 15fps).
+
+**Fix:** Added per-class 5-second cooldown in `_live_scan`. Same class (e.g. "person") logged at most once every 5 seconds.
+
+**Files:** `backend/drone/demo_router.py`
+
+---
+
+### End-of-session status
+
+**Demo pipeline fully working:**
+- picamera2 + IMX500 → `latest_detection` populated at 15fps
+- `_live_scan` → detection log + occupancy grid
+- Telemetry WS → detection cards on data screen
+- Occupancy map yellow ring on detection position
+- PDF export → occupancy map + detection table + per-detection camera frames
+
+**Hardware status:**
+
+| Component | Status |
+|---|---|
+| Motor 1 ESC | ✅ Replaced, all 4 motors confirmed on arm |
+| Flight (battery) | ⏳ Not yet tested — PSU brownout confirmed, battery required |
+| Demo mode pipeline | ✅ Fully working end-to-end |
+| Camera AI (picamera2) | ✅ Detections flowing through to UI and PDF |
+
+### Next
+1. Battery arm test (no props) → confirm all 4 motors stable under load
+2. Throttle-up stress test → then props + tethered hover
+3. Full SAR pipeline: arm → takeoff → sweep → RTL → export PDF
+
+---
+
+## Session 6 — 2026-04-22
+
+### Part 1 — RPi Brownout Root Cause: UBEC/PDB Power Path
+
+**Symptom:** Every time motors armed and spun up (battery powered), RPi would brownout and lose connection. Earlier this was masked by the PSU current limit causing an identical-looking failure.
+
+**Root cause confirmed:** RPi was powered via a UBEC connected to the PDB. When all 4 motors spin up, voltage on the PDB sags under load. The UBEC output follows the sag → RPi brownouts.
+
+**Temporary fix:** Disconnected RPi from UBEC. Powered RPi via USB-C from laptop. FC remains on LiPo battery. This completely separates the RPi power rail from motor load.
+
+**Confirmed working:** With RPi on USB power, motors armed via website and held running — no brownout. UBEC/PDB confirmed as root cause.
+
+**Permanent fix needed:** RPi needs a clean, isolated power source:
+- Option 1 (recommended): USB power bank velcro'd to frame — fully isolated from PDB
+- Option 2: Separate small LiPo + dedicated 5V/3A BEC with no PDB connection
+- Option 3: Better UBEC with bulk capacitors (less reliable fix)
+
+---
+
+### Part 2 — RC Failsafe Disabled
+
+**Problem:** After arming via website (battery power, RPi on USB), motors would spin for ~2 seconds then stop with "dying" ESC sounds. Mission Planner arm worked fine.
+
+**Root cause:** `FS_THR_ENABLE` was enabled. With no RC transmitter connected, ArduCopter triggered the throttle/RC failsafe ~2 seconds after arm and executed its failsafe action (land → disarm).
+
+**Fix:** Set `FS_THR_ENABLE = 0` via Mission Planner → Full Parameter List.
+
+**Note:** Re-enable `FS_THR_ENABLE = 1` if an RC transmitter is used for manual flight. For fully autonomous web-controlled flight with no RC, leave at 0.
+
+---
+
+### Part 3 — EKF Position Invalid: RNGFND1_MAX_CM = 1
+
+**Symptom:** `mode guided` → `AP: Mode change to GUIDED failed: requires position`. MAVSDK takeoff also failed. Even with `EK3_SRC1_VELXY = 5` (optical flow) set correctly.
+
+**Investigation via MAVProxy interactive session:**
+
+| Parameter | Found | Required | Action |
+|---|---|---|---|
+| `EK3_SRC1_VELXY` | 5 | 5 | ✓ already correct |
+| `EK3_SRC1_POSZ` | 1 (Baro) | 2 (RangeFinder) | set to 2 |
+| `EK3_SRC1_POSXY` | 0 (None) | 0 | ✓ correct |
+| `AHRS_EKF_TYPE` | 3 | 3 | ✓ correct |
+| `GPS1_TYPE` | 0 | 0 | ✓ correct |
+| `RNGFND1_TYPE` | 32 (MTF-01) | 32 | ✓ correct |
+| `RNGFND1_ORIENT` | 25 (down) | 25 | ✓ correct |
+| `RNGFND1_MIN_CM` | 0 | 0 | ✓ correct |
+| **`RNGFND1_MAX_CM`** | **1** | **400** | **fixed** |
+
+**Root cause:** `RNGFND1_MAX_CM = 1` — the ToF rangefinder maximum range was 1 cm. Every single distance reading the VL53L1X produced was out of range and discarded. EKF never received height data → could not convert optical flow angular rates to velocity → position never valid.
+
+**Fix:**
+```
+param set RNGFND1_MAX_CM 400
+param set EK3_SRC1_POSZ 2
+reboot
+```
+
+**Result after fix:** `AP: EKF3 IMU0 started relative aiding` — EKF began using optical flow + rangefinder. Armed in GUIDED mode via MAVProxy — **success**. First time GUIDED mode was accepted.
+
+**Rangefinder verified working:** `status RANGEFINDER` showed `distance: 0.13m`, decreased to `0.03m` when hand moved closer.
+
+---
+
+### Part 4 — Takeoff Code Revised: MAVSDK action.takeoff()
+
+**Background:** Session 4 confirmed NED setpoint takeoff worked (~1.0m). In this session with all 4 motors and EKF just initialised via relative aiding, the NED setpoint approach (`set_mode(GUIDED)` + `SET_POSITION_TARGET_LOCAL_NED` from ground) resulted in motors spinning at idle throttle without climbing.
+
+**Root cause of no-lift:** GUIDED mode on the ground with only position setpoints does not reliably ramp throttle from 0. ArduCopter needs `MAV_CMD_NAV_TAKEOFF` to initiate the ground-to-air transition sequence.
+
+**Fix:** Changed `controller.py takeoff()` to use `MAVSDK action.set_takeoff_altitude()` + `action.takeoff()`, which sends the correct `NAV_TAKEOFF` command sequence. After takeoff completes, FC is in GUIDED mode and NED setpoints work normally for mission.
+
+```python
+# Before (Session 4 approach — worked then, failed this session):
+await loop.run_in_executor(None, self._set_guided_mode)
+# ... loop sending NED setpoints from ground
+
+# After (current):
+await self._drone.action.set_takeoff_altitude(alt)
+await self._drone.action.takeoff()
+# ... poll rel_alt until >= 85% of target
+```
+
+**Status:** Code changed, not yet flight-confirmed (battery depleted before test).
+
+**Files:** `backend/drone/controller.py`
+
+---
+
+### Part 5 — Camera Blue Tint Fixed
+
+**Symptom:** Camera feed on website showed everything with a strong blue cast.
+
+**Root cause:** Picamera2 `RGB888` format stores pixels as BGR in memory (libcamera convention). Code was applying `cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)` — treating BGR data as RGB and converting, effectively making it RGB. `cv2.imencode` then encoded that as a JPEG expecting BGR input → red and blue channels swapped in output → blue tint.
+
+**Fix:** Removed the `cvtColor` call. Frame from `req.make_array("main")` with `RGB888` format is already BGR-ordered, correct for OpenCV directly.
+
+**Files:** `backend/app/camera_streamer.py`
+
+---
+
+### Part 6 — Battery Depleted, FC Brownout on Props-On Test
+
+**Sequence:**
+1. Props installed, attempted arm + takeoff via website
+2. FC armed (`COMPONENT_ARM_DISARM: ACCEPTED`)
+3. MAVProxy immediately reported `no link` / `link 1 down`
+4. Motors did not spin (ESC sounds absent after battery reconnect)
+
+**Root cause:** Battery was depleted from the day's testing. Under motor load at takeoff throttle, battery voltage sagged below FC minimum operating voltage → FC browned out → serial link lost → MAVProxy lost connection.
+
+**Confirmation:** No ESC startup sounds after battery reconnect = battery too low to power ESCs properly.
+
+**Action:** Charge battery. Retry with full charge.
+
+---
+
+### End-of-session hardware status
+
+| Component | Status |
+|---|---|
+| RPi power (USB from laptop) | ✅ Clean, no brownout |
+| UBEC/PDB RPi power path | ❌ Confirmed broken under motor load |
+| RC failsafe | ✅ Disabled (FS_THR_ENABLE=0) |
+| EKF3 position (optical flow + ToF) | ✅ Working — relative aiding confirmed |
+| GUIDED mode arm (MAVProxy) | ✅ Confirmed |
+| Website arm/disarm | ✅ Confirmed |
+| Takeoff with props | ⏳ Untested — battery depleted |
+| Camera blue tint | ✅ Fixed |
+| Takeoff code (MAVSDK NAV_TAKEOFF) | ⏳ Code updated, not flight-confirmed |
+
+### Next
+1. Charge LiPo fully
+2. Get a USB power bank for RPi (permanent solution — no USB cable near props)
+3. Arm → Takeoff 0.2m hover test via website
+4. If hover stable → full SAR pipeline test
 

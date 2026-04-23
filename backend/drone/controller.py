@@ -127,22 +127,17 @@ class DroneController:
             )
 
     async def takeoff(self, alt: float = 1.5):
-        """Wait for EKF position, switch to GUIDED, then climb via NED setpoints."""
+        """Wait for EKF position, then use MAVSDK takeoff (NAV_TAKEOFF) to climb."""
         print("[DroneController] Waiting for EKF local position estimate...")
         await self._wait_for_local_position(timeout=20.0)
-        print("[DroneController] Position OK — switching to GUIDED")
+        print(f"[DroneController] Position OK — taking off to {alt} m")
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._set_guided_mode)
-        await asyncio.sleep(0.5)
+        await self._drone.action.set_takeoff_altitude(alt)
+        await self._drone.action.takeoff()
 
-        snap = self.snapshot()
-        target_down = -alt  # NED: negative = above ground
-
-        deadline = loop.time() + 20.0
-        while loop.time() < deadline:
-            self.send_ned_setpoint(snap.local_north, snap.local_east, target_down)
-            await asyncio.sleep(0.2)
+        deadline = asyncio.get_running_loop().time() + 30.0
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.5)
             if self.snapshot().rel_alt >= alt * 0.85:
                 return
         raise RuntimeError(f"Takeoff timed out — reached {self.snapshot().rel_alt:.2f} m of {alt:.1f} m")
