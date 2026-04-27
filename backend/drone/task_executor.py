@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from backend.drone.controller import DroneController
     from backend.app.camera_streamer import latest_detection
     from backend.app.lidar_streamer import LidarStreamer
+    from backend.app.servo_gripper import ServoGripper
 
 ROW_SPACING_M = 0.8   # metres between sweep rows
 
@@ -70,11 +71,13 @@ class TaskExecutor:
         lidar: "LidarStreamer",
         detection_log: DetectionLog,
         grid: OccupancyGrid,
+        gripper: "ServoGripper | None" = None,
     ):
         self._ctrl      = ctrl
         self._lidar     = lidar
         self._log       = detection_log
         self._grid      = grid
+        self._gripper   = gripper
         self._offboard  = OffboardExecutor(ctrl, lidar)
         self._task: Optional[asyncio.Task] = None
         self._target_class = ""
@@ -121,8 +124,8 @@ class TaskExecutor:
 
             snap = self._ctrl.snapshot()
             for obj in det["objects"]:
-                label = obj.get("label", "").lower()
-                conf  = obj.get("confidence", 0.0)
+                label = obj.get("class", obj.get("label", "")).lower()
+                conf  = obj.get("score",  obj.get("confidence", 0.0))
                 if self._target_class in label and conf > 0.5:
                     # Capture current frame
                     frame = camera_streamer.latest_frame
@@ -135,6 +138,8 @@ class TaskExecutor:
                     )
                     self._grid.add_detection(snap.local_north, snap.local_east)
                     print(f"[TaskExecutor] Detection: {label} {conf:.2f} at N{snap.local_north:.2f} E{snap.local_east:.2f}")
+                    if self._gripper and self._gripper.cooldown_ok():
+                        asyncio.create_task(self._gripper.drop())
 
     async def _update_map(self):
         """Feed LiDAR snapshots into occupancy grid at ~5 Hz."""

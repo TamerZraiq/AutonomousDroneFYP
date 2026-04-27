@@ -36,6 +36,7 @@ from .task_executor import TaskExecutor
 from backend.app.detection_log import DetectionLog
 from backend.app.occupancy_grid import OccupancyGrid
 from backend.app.lidar_streamer import LidarStreamer
+from backend.app.servo_gripper import ServoGripper
 
 router    = APIRouter(prefix="/api/drone")
 ws_router = APIRouter()
@@ -47,20 +48,23 @@ _lidar:  LidarStreamer   | None = None
 _log:    DetectionLog    | None = None
 _grid:   OccupancyGrid   | None = None
 _task_exec: TaskExecutor | None = None
+_gripper: ServoGripper   | None = None
 
 
 def set_dependencies(
-    ctrl:  DroneController,
-    sm:    StateMachine,
-    lidar: LidarStreamer,
+    ctrl:    DroneController,
+    sm:      StateMachine,
+    lidar:   LidarStreamer,
+    gripper: "ServoGripper | None" = None,
 ):
-    global _ctrl, _sm, _lidar, _log, _grid, _task_exec
-    _ctrl  = ctrl
-    _sm    = sm
-    _lidar = lidar
+    global _ctrl, _sm, _lidar, _log, _grid, _task_exec, _gripper
+    _ctrl    = ctrl
+    _sm      = sm
+    _lidar   = lidar
+    _gripper = gripper
     _log   = DetectionLog()
     _grid  = OccupancyGrid()
-    _task_exec = TaskExecutor(ctrl, lidar, _log, _grid)
+    _task_exec = TaskExecutor(ctrl, lidar, _log, _grid, gripper)
 
 
 def get_singletons():
@@ -204,6 +208,32 @@ async def reset():
         return JSONResponse({"error": f"cannot reset from {_sm.state}"}, status_code=409)
     await _sm.transition(State.IDLE)
     return {"ok": True, "state": _sm.state}
+
+
+# ── REST: gripper ────────────────────────────────────────────────────────────
+
+@router.post("/gripper/open")
+async def gripper_open():
+    if _gripper is None or not _gripper.available:
+        return JSONResponse({"error": "gripper not available"}, status_code=503)
+    _gripper.open()
+    return {"ok": True, "action": "open"}
+
+
+@router.post("/gripper/close")
+async def gripper_close():
+    if _gripper is None or not _gripper.available:
+        return JSONResponse({"error": "gripper not available"}, status_code=503)
+    _gripper.close()
+    return {"ok": True, "action": "close"}
+
+
+@router.post("/gripper/drop")
+async def gripper_drop():
+    if _gripper is None or not _gripper.available:
+        return JSONResponse({"error": "gripper not available"}, status_code=503)
+    asyncio.create_task(_gripper.drop())
+    return {"ok": True, "action": "drop"}
 
 
 # ── REST: mission ─────────────────────────────────────────────────────────────

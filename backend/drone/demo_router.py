@@ -21,10 +21,11 @@ from backend.app.lidar_streamer import LidarStreamer
 
 router = APIRouter(prefix="/api/demo")
 
-_sm:    StateMachine | None = None
-_log:   DetectionLog | None = None
-_grid:  OccupancyGrid | None = None
-_lidar: LidarStreamer | None = None
+_sm:      StateMachine | None = None
+_log:     DetectionLog | None = None
+_grid:    OccupancyGrid | None = None
+_lidar:   LidarStreamer | None = None
+_gripper = None  # ServoGripper | None
 
 _scan_task: asyncio.Task | None = None
 
@@ -49,16 +50,18 @@ def get_demo_overrides() -> dict:
 
 
 def set_demo_dependencies(
-    sm:    StateMachine,
-    log:   DetectionLog,
-    grid:  OccupancyGrid,
-    lidar: LidarStreamer,
+    sm:      StateMachine,
+    log:     DetectionLog,
+    grid:    OccupancyGrid,
+    lidar:   LidarStreamer,
+    gripper=None,
 ):
-    global _sm, _log, _grid, _lidar
-    _sm    = sm
-    _log   = log
-    _grid  = grid
-    _lidar = lidar
+    global _sm, _log, _grid, _lidar, _gripper
+    _sm      = sm
+    _log     = log
+    _grid    = grid
+    _lidar   = lidar
+    _gripper = gripper
 
 
 # ── background scan ───────────────────────────────────────────────────────────
@@ -105,6 +108,8 @@ async def _live_scan(target_class: str):
                 _log.add(label, conf, 0.0, 0.0, frame_jpg=frame)
                 _grid.add_detection(0.0, 0.0)
                 print(f"[Demo] AI detection: {label} {conf:.2f}")
+                if _gripper and _gripper.cooldown_ok():
+                    asyncio.create_task(_gripper.drop())
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
