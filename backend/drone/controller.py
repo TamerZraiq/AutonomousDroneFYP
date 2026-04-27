@@ -174,12 +174,15 @@ class DroneController:
         if not ok:
             raise RuntimeError("FC rejected both FLOWHOLD and ALT_HOLD — check arming state")
 
-        # THR_DZ=100 means deadband ±100 around 1500. Use 1700 to climb clearly above it.
-        self._override_throttle = 1700
+        # Start override loop, then ramp throttle slowly to avoid inrush current spike
+        self._override_throttle = 1100
         if self._override_task is None or self._override_task.done():
             self._override_task = asyncio.create_task(self._rc_override_loop())
 
-        print(f"[DroneController] Climbing to {alt} m")
+        print(f"[DroneController] Ramping throttle — climbing to {alt} m")
+        for target in range(1150, 1701, 50):
+            self._override_throttle = target
+            await asyncio.sleep(0.3)   # full ramp takes ~3.3 s
         deadline = loop.time() + 30.0
         while loop.time() < deadline:
             await asyncio.sleep(0.3)

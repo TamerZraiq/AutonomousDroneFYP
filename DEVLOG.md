@@ -875,3 +875,98 @@ After reboot, wait for `EKF3 using optical flow` in terminal before arming.
 3. Confirm hover stable → investigate GUIDED mode for SAR waypoint mission
 4. Long term: get LiPo allocated or use bench supply rated for 20A+
 
+---
+
+## Session — 2026-04-27 continued
+
+### Servo Gripper Integration
+
+**Hardware:** Pololu servo gripper connected to RPi GPIO 12 (physical pin 32), 5V from pin 2, GND from pin 14.
+
+**Software created:** `backend/app/servo_gripper.py`
+- Uses `pigpio` library for hardware-timed PWM (not software PWM — critical for servo stability)
+- `ServoGripper(pin=12)` connects to `pigpiod` daemon on init. If pigpiod is not running, `available` returns False and all endpoints return 503 gracefully — no crash.
+- `open()` / `close()` — instant position commands
+- `async drop()` — opens, holds for `DROP_HOLD=2.0s`, closes. Non-reentrant via `asyncio.Lock`.
+- `cooldown_ok(seconds=5.0)` — prevents re-trigger within 5s of last drop
+- `shutdown()` — sets pulsewidth to 0 (PWM off) and stops pigpio connection
+
+**Auto-trigger:** `task_executor._monitor_detections()` calls `gripper.drop()` as a background task when target class detected with conf > 0.5 and cooldown is clear. Same logic added to `demo_router._live_scan()` so it fires during ground-test scan too.
+
+**Manual endpoints added to `router.py`:**
+- `POST /api/drone/gripper/open`
+- `POST /api/drone/gripper/close`
+- `POST /api/drone/gripper/drop` (fire-and-forget, returns immediately)
+
+**Frontend:** Three buttons added above Emergency Stop — "Gripper Open", "Drop", "Gripper Close".
+
+**Wiring up in `main.py`:** `ServoGripper()` instantiated at startup, passed to `set_dependencies` and `set_demo_dependencies`. `gripper.shutdown()` called on app shutdown.
+
+---
+
+### Bug: Detection key mismatch — task_executor never triggered
+
+`task_executor._monitor_detections()` was reading `obj.get("label")` and `obj.get("confidence")` but `camera_streamer._parse()` stores objects with keys `"class"` and `"score"`. These never matched → label was always `""`, confidence always `0.0` → target class check always failed → nothing logged, gripper never triggered.
+
+**Fix:** Changed to `obj.get("class", obj.get("label", ""))` and `obj.get("score", obj.get("confidence", 0.0))` with fallback for compatibility. Same fix applied in `demo_router._live_scan` already had correct dual-key handling.
+
+---
+
+### pigpiod setup
+
+pigpiod must be running before the backend starts. ServoGripper connects to it at `__init__` time — it does not retry.
+
+```bash
+sudo systemctl enable pigpiod   # auto-start on boot
+sudo systemctl start pigpiod
+```
+
+If you run `sudo pigpiod` manually first and then `systemctl start pigpiod`, it will fail with "Can't lock /var/run/pigpio.pid" (duplicate instance). Kill the manual one first: `sudo killall pigpiod && sudo systemctl start pigpiod`.
+
+---
+
+### Servo pulse width tuning
+
+Initial values (1200/1800 µs) produced ~5mm of travel. Cause: too narrow a range.
+
+Trial sequence:
+1. `600 / 2400` µs → much better travel, but buzzing at closed position (servo strained against mechanical hard stop)
+2. `500 / 2100` µs → full open travel, no buzzing at closed — **confirmed working**
+
+Final values in `servo_gripper.py`:
+```python
+CLOSED_PW = 2100   # µs
+OPEN_PW   =  500   # µs
+```
+
+If buzzing returns after mechanical wear or a different gripper unit, back CLOSED_PW off in 100 µs steps until silent.
+
+---
+
+### EKF3 cycling diagnosis (ground behaviour)
+
+MAVProxy shows repeated `EKF3 IMU0 started relative aiding` → `fusing optical flow` → `stopped aiding`. This is expected on the ground:
+
+- Optical flow reports near-zero velocity when stationary
+- At ground height (2–5 cm), rangefinder scaling of optical flow is noisy
+- EKF fuses a few frames, innovation check fails, drops it, retries
+
+This is **not** a blocker for FLOWHOLD/ALT_HOLD takeoff (those modes bypass EKF position). Once airborne at 30+ cm with real surface motion, EKF typically stabilises into continuous "fusing optical flow". If it doesn't stabilise in the air, the rangefinder is the suspect (check `status RANGEFINDER` mid-flight via MAVProxy).
+
+---
+
+### End-of-session status
+
+| Component | Status |
+|---|---|
+| Servo gripper (GPIO 12) | ✅ Working — auto-trigger + manual UI |
+| pigpiod | ✅ Running, enabled on boot |
+| Detection key mismatch bug | ✅ Fixed |
+| Frontend rebuild | ✅ Deployed via `./start.sh --build` |
+| Hover test | ⏳ Still pending LiPo / adequate PSU |
+
+### Next
+1. LiPo battery for hover test
+2. Confirm EKF3 stabilises in air (check MAVProxy after takeoff)
+3. Attempt GUIDED mode switch once airborne → enables full SAR waypoint mission
+

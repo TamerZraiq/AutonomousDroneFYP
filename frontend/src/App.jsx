@@ -366,6 +366,18 @@ export default function App() {
                 disabled={busy || !["LANDED","ARMED","EMERGENCY"].includes(telem.state)}
                 className="btn-ghost w-full py-2 text-xs">Reset State</button>
 
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={() => cmd("/api/drone/gripper/open")}
+                  disabled={busy}
+                  className="btn-secondary py-2 text-xs">Gripper Open</button>
+                <button onClick={() => cmd("/api/drone/gripper/drop")}
+                  disabled={busy}
+                  className="btn-primary py-2 text-xs">Drop</button>
+                <button onClick={() => cmd("/api/drone/gripper/close")}
+                  disabled={busy}
+                  className="btn-secondary py-2 text-xs">Gripper Close</button>
+              </div>
+
               <button onClick={() => cmd("/api/drone/emergency")}
                 className="w-full py-3 rounded-lg font-bold text-sm transition-colors"
                 style={{ background: "#7f1d1d", color: "#fca5a5", border: "1px solid #991b1b" }}

@@ -43,12 +43,14 @@ if not SIM_MODE:
     from backend.drone.state_machine import StateMachine
     from backend.drone.router import router as drone_router, ws_router, set_dependencies, get_singletons
     from backend.drone.demo_router import router as demo_router, set_demo_dependencies
+    from backend.app.servo_gripper import ServoGripper
 
-    ctrl = DroneController()
-    sm   = StateMachine()
-    set_dependencies(ctrl, sm, lidar)
+    ctrl    = DroneController()
+    sm      = StateMachine()
+    gripper = ServoGripper()
+    set_dependencies(ctrl, sm, lidar, gripper)
     _log, _grid = get_singletons()
-    set_demo_dependencies(sm, _log, _grid, lidar)
+    set_demo_dependencies(sm, _log, _grid, lidar, gripper)
     app.include_router(drone_router)
     app.include_router(ws_router)
     app.include_router(demo_router)
@@ -74,6 +76,7 @@ async def shutdown():
     lidar.stop()
     if not SIM_MODE:
         await ctrl.disconnect()
+        gripper.shutdown()
 
 
 @app.get("/")
