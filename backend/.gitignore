@@ -1,4 +1,150 @@
+###############################################
+# PYTHON / FASTAPI BACKEND
+###############################################
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.dll
+
+# Virtual environments
 venv/
+.env/
+.env.*
+
+
+###############################################
+# CAMERA / IMX500 / RPICAM OUTPUT
+###############################################
+# Generated metadata files
+*.metadata.json
+metadata-*.json
+metadata*.json
+metadata_format.json
+metadata-format.json
+*metadata*.json
+
+# Raw camera dumps
+*.raw
+*.bin
+*.ppm
+*.yuv
+*.rgb
+*.h264
+*.h265
+*.mjpeg
+*.jpg
+*.jpeg
+*.png
+*.bmp
+
+# AI post-processing
+*.trace
+*.log
+*.tmp
+*.cache
+
+# ffmpeg outputs
+*.mp4
+*.avi
+*.mov
+*.ts
+
+
+###############################################
+# NODE / VITE FRONTEND
+###############################################
+node_modules/
+dist/
+.cache/
+vite.config.js.timestamp
+vite.config.ts.timestamp
+
+# Build output
+build/
+*.local
+
+# pnpm / yarn
+pnpm-lock.yaml
+yarn.lock
+
+
+###############################################
+# EDITOR & TOOLING
+###############################################
+# VS Code
+.vscode/
+.history/
+*.code-workspace
+
+# JetBrains
+.idea/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+
+###############################################
+# LOGS AND TEMPORARY
+###############################################
+logs/
+*.log
+*.out
+*.err
+*.pid
+*.tmp
+
+# Python tooling
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+
+# FastAPI auto-reload temp files
+watchfiles-*
+uvicorn.access.log
+uvicorn.error.log
+
+
+###############################################
+# ROS2 
+###############################################
+install/
+build/
+log/
+colcon_command.log
+*.db3
+
+
+###############################################
+# PROJECT-SPECIFIC
+###############################################
+# Lidar or camera calibration dumps
+calibration/
+calib/
+*.pcd
+*.yaml
+
+# Prevent huge binary accidents
+dump/
+output/
+recordings/
+
+# Keep static frontend assets but ignore temp
+backend/app/static/*.tmp
+backend/app/static/*.bak
+
+# Ignore backup files created by editors
+*~
+*.bak
+*.backup
+
+###############################################
+# END OF FILE
+###############################################
