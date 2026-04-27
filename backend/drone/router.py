@@ -63,6 +63,11 @@ def set_dependencies(
     _task_exec = TaskExecutor(ctrl, lidar, _log, _grid)
 
 
+def get_singletons():
+    """Return (log, grid) after set_dependencies has been called."""
+    return _log, _grid
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _snap_dict():
@@ -115,16 +120,31 @@ async def arm():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/disarm")
+async def disarm():
+    try:
+        await _ctrl.disarm()
+        await _sm.transition(State.IDLE)
+        return {"ok": True, "state": _sm.state}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/takeoff")
 async def takeoff(body: dict = {}):
     alt = float(body.get("alt", 1.2))
     if not await _sm.transition(State.TAKEOFF):
         return JSONResponse({"error": f"cannot takeoff from {_sm.state}"}, status_code=409)
+    asyncio.create_task(_run_takeoff(alt))
+    return {"ok": True, "state": _sm.state, "alt": alt}
+
+
+async def _run_takeoff(alt: float):
     try:
         await _ctrl.takeoff(alt)
-        return {"ok": True, "state": _sm.state, "alt": alt}
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        print(f"[takeoff] failed: {e}")
+        await _sm.transition(State.ARMED)
 
 
 @router.post("/land")
@@ -157,6 +177,25 @@ async def emergency():
     except Exception:
         pass
     return {"ok": True, "state": _sm.state}
+
+
+@router.post("/motor_test")
+async def motor_test(body: dict = {}):
+    """
+    Spin one or all motors without arming.
+    body: { "motor": 1-4 or 0 for all, "throttle": 0-100, "duration": seconds }
+    """
+    motor      = int(body.get("motor", 0))
+    throttle   = float(body.get("throttle", 10.0))
+    duration   = float(body.get("duration", 2.0))
+    motors     = [motor] if motor != 0 else [1, 2, 3, 4]
+    try:
+        loop = asyncio.get_running_loop()
+        for m in motors:
+            await loop.run_in_executor(None, _ctrl.motor_test, m, throttle, duration)
+        return {"ok": True, "motors": motors, "throttle": throttle, "duration": duration}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/reset")
@@ -239,6 +278,18 @@ async def clear_detections():
 
 # ── REST: report ──────────────────────────────────────────────────────────────
 
+@router.get("/debug")
+def debug_state():
+    """Quick sanity check — call this from the browser while scan is running."""
+    from backend.drone.demo_router import _scan_task
+    return {
+        "log_len":      len(_log),
+        "detections":   _log.as_dicts(),
+        "scan_running": _scan_task is not None and not _scan_task.done(),
+        "grid_detections": len(_grid._detections),
+    }
+
+
 @router.get("/report/json")
 def report_json():
     entries = _log.all()
@@ -261,19 +312,21 @@ def report_json():
 
 @ws_router.websocket("/ws/telemetry")
 async def telemetry_ws(ws: WebSocket):
+    from backend.drone.demo_router import get_demo_overrides
     await ws.accept()
     try:
         async for snap in _ctrl.stream_telemetry(hz=5.0):
-            os = _task_exec.offboard_status
+            os  = _task_exec.offboard_status
+            ov  = get_demo_overrides()
             payload = json.dumps({
-                "connected":   snap.connected,
+                "connected":   ov.get("connected",   snap.connected),
                 "state":       _sm.state,
-                "armed":       snap.armed,
-                "flight_mode": snap.flight_mode,
+                "armed":       ov.get("armed",       snap.armed),
+                "flight_mode": ov.get("flight_mode", snap.flight_mode),
                 "lat":         snap.lat,
                 "lon":         snap.lon,
                 "abs_alt":     snap.abs_alt,
-                "rel_alt":     snap.rel_alt,
+                "rel_alt":     ov.get("rel_alt",     snap.rel_alt),
                 "battery_pct": snap.battery_pct,
                 "local_north": snap.local_north,
                 "local_east":  snap.local_east,

@@ -31,7 +31,7 @@ case "$1" in
   --build)
     echo "[AeroDrop] Building frontend..."
     cd "$DIR/frontend"
-    npm run build && cp -r dist/* "$DIR/backend/app/static/"
+    node node_modules/vite/bin/vite.js build --outDir "$DIR/backend/app/static" --emptyOutDir
     echo "[AeroDrop] Frontend deployed to backend/app/static/"
     ;;
 

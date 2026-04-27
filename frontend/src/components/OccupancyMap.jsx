@@ -29,17 +29,6 @@ export default function OccupancyMap({ map, size = 460 }) {
       }
     }
 
-    // Detection markers
-    for (const d of detections) {
-      ctx.beginPath();
-      ctx.arc(d.col * cellPx + cellPx / 2, d.row * cellPx + cellPx / 2, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#fbbf24";
-      ctx.fill();
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    }
-
     // Drone dot + heading arrow
     const dx  = drone_col * cellPx + cellPx / 2;
     const dy  = drone_row * cellPx + cellPx / 2;
@@ -58,6 +47,23 @@ export default function OccupancyMap({ map, size = 460 }) {
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
+
+    // Detection markers — drawn on top of everything so they're always visible
+    for (const d of detections) {
+      const cx = d.col * cellPx + cellPx / 2;
+      const cy = d.row * cellPx + cellPx / 2;
+      // filled yellow dot
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#fbbf24";
+      ctx.fill();
+      // white ring so it pops against any background
+      ctx.beginPath();
+      ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
 
     // Scale bar — 1 m
     const meterPx = (1 / map.resolution) * cellPx;

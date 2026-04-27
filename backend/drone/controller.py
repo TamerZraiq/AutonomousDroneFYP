@@ -50,6 +50,8 @@ class DroneController:
         self._snap    = TelemetrySnapshot()
         self._snap_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
+        self._override_throttle: Optional[int] = None
+        self._override_task: Optional[asyncio.Task] = None
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -92,6 +94,7 @@ class DroneController:
         print("[DroneController] pymavlink heartbeat received ✓")
 
     async def disconnect(self):
+        self._stop_override()
         for t in self._tasks:
             t.cancel()
         self._tasks.clear()
@@ -112,37 +115,127 @@ class DroneController:
     async def arm(self):
         await self._drone.action.arm()
 
-    async def takeoff(self, alt: float = 1.5):
-        """Switch to GUIDED then climb via NED setpoints — works reliably with ArduCopter."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._set_guided_mode)
-        await asyncio.sleep(0.5)
-
-        snap = self.snapshot()
-        target_down = -alt  # NED: negative = above ground
-
-        deadline = loop.time() + 20.0
-        while loop.time() < deadline:
-            self.send_ned_setpoint(snap.local_north, snap.local_east, target_down)
-            await asyncio.sleep(0.2)
-            if self.snapshot().rel_alt >= alt * 0.85:
-                return
-        raise RuntimeError(f"Takeoff timed out — reached {self.snapshot().rel_alt:.2f} m of {alt:.1f} m")
-
-    def _set_guided_mode(self):
+    def _try_mode(self, mode_num: int, name: str) -> bool:
+        """Try to switch to mode_num via pymavlink. Returns True if FC accepts within 3 s."""
         if self._mav is None:
-            raise RuntimeError("pymavlink not connected")
-        self._mav.set_mode(4)  # GUIDED = 4 for ArduCopter
-        time.sleep(0.3)
+            return False
+        self._mav.set_mode(mode_num)
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            msg = self._mav.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)
+            if msg and msg.custom_mode == mode_num:
+                print(f"[DroneController] {name} (mode {mode_num}) ✓")
+                return True
+        print(f"[DroneController] {name} (mode {mode_num}) rejected")
+        return False
+
+    def _send_throttle_override(self, throttle: int):
+        """Override RC channel 3 (throttle). 65535 = leave other channels alone."""
+        if self._mav is None:
+            return
+        self._mav.mav.rc_channels_override_send(
+            1, 1,
+            65535, 65535, throttle, 65535,
+            65535, 65535, 65535, 65535,
+        )
+
+    async def _rc_override_loop(self):
+        """Send throttle override every 0.4 s so it doesn't time out (RC_OVERRIDE_TIME=3 s)."""
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                if self._override_throttle is not None:
+                    await loop.run_in_executor(
+                        None, self._send_throttle_override, self._override_throttle
+                    )
+                await asyncio.sleep(0.4)
+        except asyncio.CancelledError:
+            await loop.run_in_executor(None, self._send_throttle_override, 0)
+
+    def _stop_override(self):
+        self._override_throttle = None
+        if self._override_task and not self._override_task.done():
+            self._override_task.cancel()
+        self._override_task = None
+
+    async def takeoff(self, alt: float = 1.5):
+        """
+        Take off using FLOWHOLD (optical flow velocity hold) with ALT_HOLD as fallback.
+        Both modes bypass the EKF position requirement that blocks GUIDED mode.
+        Altitude is controlled via RC channel 3 override.
+        """
+        loop = asyncio.get_running_loop()
+
+        # FLOWHOLD (22) = optical flow + baro, no position required
+        # ALT_HOLD (2)  = baro only, always accepted
+        ok = await loop.run_in_executor(None, self._try_mode, 22, "FLOWHOLD")
+        if not ok:
+            ok = await loop.run_in_executor(None, self._try_mode, 2, "ALT_HOLD")
+        if not ok:
+            raise RuntimeError("FC rejected both FLOWHOLD and ALT_HOLD — check arming state")
+
+        # THR_DZ=100 means deadband ±100 around 1500. Use 1700 to climb clearly above it.
+        self._override_throttle = 1700
+        if self._override_task is None or self._override_task.done():
+            self._override_task = asyncio.create_task(self._rc_override_loop())
+
+        print(f"[DroneController] Climbing to {alt} m")
+        deadline = loop.time() + 30.0
+        while loop.time() < deadline:
+            await asyncio.sleep(0.3)
+            if self.snapshot().rel_alt >= alt * 0.85:
+                self._override_throttle = 1500  # midpoint = hold altitude
+                print(f"[DroneController] Hovering at {self.snapshot().rel_alt:.2f} m ✓")
+                return
+
+        self._override_throttle = 1500
+        raise RuntimeError(f"Takeoff timed out — only reached {self.snapshot().rel_alt:.2f} m")
 
     async def land(self):
-        await self._drone.action.land()
+        if self._override_task and not self._override_task.done():
+            self._override_throttle = 1350  # below deadband → gentle descent
+            deadline = asyncio.get_running_loop().time() + 20.0
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.3)
+                if self.snapshot().rel_alt < 0.15:
+                    break
+            self._stop_override()
+            await asyncio.sleep(0.5)
+            try:
+                await self._drone.action.disarm()
+            except Exception:
+                pass
+        else:
+            await self._drone.action.land()
 
     async def rtl(self):
-        await self._drone.action.return_to_launch()
+        await self.land()
 
     async def disarm(self):
+        self._stop_override()
         await self._drone.action.disarm()
+
+    # ── motor test (pymavlink) ───────────────────────────────────────────────
+
+    def motor_test(self, motor: int, throttle_pct: float, duration: float = 2.0):
+        """
+        Spin one motor via MAV_CMD_DO_MOTOR_TEST (no arming required).
+        motor: 1-4 (ArduCopter motor numbering)
+        throttle_pct: 0-100
+        duration: seconds to spin
+        """
+        if self._mav is None:
+            raise RuntimeError("pymavlink not connected")
+        self._mav.mav.command_long_send(
+            1, 1,  # target system, target component
+            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+            0,             # confirmation
+            motor,         # param1: motor number (1-based)
+            0,             # param2: throttle type 0 = percent
+            throttle_pct,  # param3: throttle %
+            duration,      # param4: timeout seconds
+            0, 0, 0,
+        )
 
     # ── NED setpoint (pymavlink) ──────────────────────────────────────────────
 

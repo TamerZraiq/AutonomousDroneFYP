@@ -18,7 +18,7 @@ AIRBORNE = {State.TAKEOFF, State.MISSION, State.RTL}
 TRANSITIONS = {
     State.IDLE:      {State.ARMED},
     State.ARMED:     {State.TAKEOFF, State.IDLE, State.EMERGENCY},
-    State.TAKEOFF:   {State.MISSION, State.RTL, State.EMERGENCY},
+    State.TAKEOFF:   {State.ARMED, State.MISSION, State.RTL, State.EMERGENCY},
     State.MISSION:   {State.RTL, State.EMERGENCY},
     State.RTL:       {State.LANDED, State.EMERGENCY},
     State.LANDED:    {State.IDLE, State.EMERGENCY},
