@@ -302,7 +302,7 @@ export default function App() {
                   <label className="stat-label">Cruise Altitude</label>
                   <span className="text-sm font-mono font-bold" style={{ color: "#d4d820" }}>{altitude.toFixed(1)} m</span>
                 </div>
-                <input type="range" min="0.5" max="3" step="0.1"
+                <input type="range" min="0.2" max="3" step="0.1"
                   value={altitude} onChange={e => setAltitude(+e.target.value)} />
                 <div className="flex justify-between text-xs mt-1.5" style={{ color: "#3a4e34" }}>
                   <span>0.5 m</span><span>3.0 m</span>
@@ -366,10 +366,10 @@ export default function App() {
                 disabled={busy || !["LANDED","ARMED","EMERGENCY"].includes(telem.state)}
                 className="btn-ghost w-full py-2 text-xs">Reset State</button>
 
-              <button onClick={() => cmd("/api/drone/emergency")} disabled={busy}
-                className="w-full py-3 rounded-lg font-bold text-sm transition-colors disabled:opacity-40"
+              <button onClick={() => cmd("/api/drone/emergency")}
+                className="w-full py-3 rounded-lg font-bold text-sm transition-colors"
                 style={{ background: "#7f1d1d", color: "#fca5a5", border: "1px solid #991b1b" }}
-                onMouseEnter={e => !busy && (e.currentTarget.style.background = "#991b1b")}
+                onMouseEnter={e => e.currentTarget.style.background = "#991b1b"}
                 onMouseLeave={e => e.currentTarget.style.background = "#7f1d1d"}
               >⚠ Emergency Stop</button>
 

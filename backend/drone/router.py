@@ -135,12 +135,16 @@ async def takeoff(body: dict = {}):
     alt = float(body.get("alt", 1.2))
     if not await _sm.transition(State.TAKEOFF):
         return JSONResponse({"error": f"cannot takeoff from {_sm.state}"}, status_code=409)
+    asyncio.create_task(_run_takeoff(alt))
+    return {"ok": True, "state": _sm.state, "alt": alt}
+
+
+async def _run_takeoff(alt: float):
     try:
         await _ctrl.takeoff(alt)
-        return {"ok": True, "state": _sm.state, "alt": alt}
     except Exception as e:
-        await _sm.transition(State.ARMED)   # drone still armed on ground — allow retry
-        return JSONResponse({"error": str(e)}, status_code=500)
+        print(f"[takeoff] failed: {e}")
+        await _sm.transition(State.ARMED)
 
 
 @router.post("/land")

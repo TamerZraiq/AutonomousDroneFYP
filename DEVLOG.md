@@ -820,23 +820,58 @@ await self._drone.action.takeoff()
 
 ---
 
+---
+
+## Session — 2026-04-27
+
+### Issue: Takeoff always aborted — "no local position estimate after 20s"
+
+**Symptom:** Clicking Takeoff on the website always failed after 20 s with error "Takeoff aborted, no local position estimate after 20s, check optical flow and rangefinder are connected and producing data". Terminal showed repeated `COMMAND_ACK: REQUEST_MESSAGE: ACCEPTED` while waiting, then nothing.
+
+**Root cause:** `RNGFND1_TYPE = 32` in FC parameters is wrong for the Matek 3901-L0X. Type 32 is TOFSENSEP DroneCAN. The L0X sends rangefinder data over UART via MSP, which requires `RNGFND1_TYPE = 27` (MSP rangefinder). Without a working rangefinder, EKF3 has no altitude reference and cannot scale optical flow — so `is_local_position_ok` never becomes True. EKF3 shows tilt alignment but no "EKF3 using optical flow" message.
+
+**Fix (must apply to FC via MAVProxy):**
+```
+param set RNGFND1_TYPE 27
+reboot
+```
+After reboot, wait for `EKF3 using optical flow` in terminal before arming.
+
+**Code change:** `_wait_for_local_position` timeout extended from 20 s to 30 s; error message updated to reference the correct parameter.
+
+**Status:** FC parameter fix identified, not yet applied.
+
+---
+
+### Near-hover achieved — PSU current limit the only blocker
+
+**What happened:** Takeoff via website (ALT_HOLD mode + RC throttle override) caused motors to spin up significantly more than any previous attempt. Drone showed clear intent to lift — then PSU hit its 3.1A current limit, causing a brownout (FC emitted dying beeps, motors cut).
+
+**Significance:** This is the first time the full takeoff code path executed end-to-end. The mode switch (FLOWHOLD → ALT_HOLD fallback), RC override climb throttle, and altitude monitoring all ran correctly. The only thing that stopped it was insufficient current supply, not software or FC configuration.
+
+**Root cause of brownout:** No LiPo battery allocated to this build. Lab PSU hard-limited at 3.1A. A quadcopter at takeoff throttle needs significantly more (typically 15–30A peak for the whole system).
+
+**Fix for next session:** Combine 4× lab PSUs in **parallel** (same voltage, additive current → ~12.4A) to supply enough current for hover. Set all PSUs to identical voltage before connecting in parallel.
+
+---
+
 ### End-of-session hardware status
 
 | Component | Status |
 |---|---|
-| RPi power (USB from laptop) | ✅ Clean, no brownout |
-| UBEC/PDB RPi power path | ❌ Confirmed broken under motor load |
-| RC failsafe | ✅ Disabled (FS_THR_ENABLE=0) |
-| EKF3 position (optical flow + ToF) | ✅ Working — relative aiding confirmed |
-| GUIDED mode arm (MAVProxy) | ✅ Confirmed |
+| RPi power | ✅ Stable |
+| UBEC/PDB RPi power path | ❌ Broken under motor load |
+| Optical flow (SERIAL3_PROTOCOL=18) | ⚠️ Rangefinder works, optical flow unconfirmed |
+| Rangefinder altitude | ✅ Confirmed accurate (0.05–0.1 m reading) |
 | Website arm/disarm | ✅ Confirmed |
-| Takeoff with props | ⏳ Untested — battery depleted |
+| Takeoff code (ALT_HOLD + RC override) | ✅ Code executed — motors spun up, brownout only stopper |
+| Actual hover | ⏳ Blocked by PSU current limit — retry with 4× PSU parallel |
 | Camera blue tint | ✅ Fixed |
-| Takeoff code (MAVSDK NAV_TAKEOFF) | ⏳ Code updated, not flight-confirmed |
+| Emergency button | ✅ Fixed — no longer disabled during busy state |
 
 ### Next
-1. Charge LiPo fully
-2. Get a USB power bank for RPi (permanent solution — no USB cable near props)
-3. Arm → Takeoff 0.2m hover test via website
-4. If hover stable → full SAR pipeline test
+1. Lab session: combine 4× PSUs in parallel (match voltage first)
+2. Arm → Takeoff 0.5m hover test via website
+3. Confirm hover stable → investigate GUIDED mode for SAR waypoint mission
+4. Long term: get LiPo allocated or use bench supply rated for 20A+
 
