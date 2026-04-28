@@ -311,7 +311,28 @@
       </div>
     </div>
   </section>
-
+  <section id="gripper">
+    <p class="sec-label">05 &middot; Payload Delivery</p>
+    <h2>Servo Gripper Auto-Trigger</h2>
+    <p class="body-text">
+      A Pololu servo gripper is controlled via pigpio hardware PWM on GPIO 12, 
+      giving microsecond-accurate pulse timing independent of CPU load. When the 
+      IMX500 detects the target class above 50% confidence, the gripper 
+      automatically executes a drop sequence: open, hold for two seconds, close. 
+      A five-second cooldown prevents re-trigger on the same stationary target. 
+      Manual open, close, and drop controls are also available from the dashboard.
+    </p>
+    <div class="two-col">
+      <div class="media-item">
+        <img src="assets/Image (13).jpg" alt="Servo gripper mounted on drone">
+        <div class="media-cap">Pololu servo gripper &middot; GPIO 12 &middot; 550–1700 µs</div>
+      </div>
+      <div class="media-item">
+        <video src="assets/gripper.gif" controls playsinline></video>
+        <div class="media-cap">Auto-trigger on person detection &middot; pigpiod &middot; servo_gripper.py</div>
+      </div>
+    </div>
+  </section>
   <section id="hardware">
     <p class="sec-label">05 &middot; Physical Build</p>
     <h2>Hardware Integration</h2>
