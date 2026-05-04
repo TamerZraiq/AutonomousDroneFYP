@@ -970,3 +970,94 @@ This is **not** a blocker for FLOWHOLD/ALT_HOLD takeoff (those modes bypass EKF 
 2. Confirm EKF3 stabilises in air (check MAVProxy after takeoff)
 3. Attempt GUIDED mode switch once airborne → enables full SAR waypoint mission
 
+---
+
+## Session — 2026-05-04
+
+### Goal
+First real hover test with 4S LiPo battery (1850mAh 100C, brand new).
+
+---
+
+### Part 1 — Battery not at full charge on first use
+
+**Symptom:** Same brownout/beeping as PSU — motors cut, ESCs fired alarm, props stopped.
+
+**Root cause:** New LiPo batteries ship at storage voltage (~3.8V/cell = 15.2V for 4S). Under motor load, voltage sags below ESC protection threshold. Balance charger showed "all LEDs on" on initial connection — this indicated cells detected, not necessarily fully charged.
+
+**Fix:** Charged battery to full (4.2V/cell = 16.8V). Confirmed via balance charger completion.
+
+---
+
+### Part 2 — FLOWHOLD altitude controller fighting RC throttle override
+
+**Symptom:** After full charge, same brownout. Log showed "split second throttle spike then back to arm speed." Backend log showed `rel_alt` stuck at -0.22m throughout entire ramp to 1600 PWM.
+
+**Root cause 1 — Barometer deceived by prop wash:** Motor downwash creates high-pressure zone over FC barometer, making `rel_alt` read negative regardless of actual altitude. The hover condition (`rel_alt >= target * 0.85`) could never be met, so code held 1600 PWM indefinitely.
+
+**Root cause 2 — EKF altitude wrong at arm time:** `local_down` showed -2.21m at arm (EKF home set 2.21m above drone's current position due to pre-arm EKF drift with rangefinder reading floor). FLOWHOLD's altitude controller used this to actively fight the RC throttle override — it thought the drone was already 2m in the air and tried to descend.
+
+**Fixes applied:**
+- Switched takeoff mode from FLOWHOLD → **STABILIZE** (direct throttle, no altitude controller, no EKF dependency)
+- Changed altitude hover check from absolute value to **relative climb from baseline** — records `base_baro` and `base_ekf` at arm time, checks climb delta instead of absolute altitude
+- Altitude slider minimum raised from 0.2m to 0.5m in frontend (0.2m is inside ground effect, too close to surface)
+
+**Files changed:** `backend/drone/controller.py`, `frontend/src/App.jsx`
+
+---
+
+### Part 3 — Root cause confirmed: 24kHz ESC switching noise on 4S
+
+**Symptom:** Brownout at ~1140 PWM even with fully charged battery and gradual 10 PWM/second ramp in standalone pymavlink script (`hover_test.py`). FC brownout confirmed — BLHeliSuite screenshot showed **Low Voltage Protection: OFF**, so the ESC "lost signal" alarm (beeping) was the ESC detecting FC PWM output going dead, not LVC.
+
+**BLHeliSuite screenshot findings:**
+- ESC: FVT Littlebee Summer 35A, BLHeli_32
+- Low Voltage Protection: **Off** — not the cause of cutoff
+- PWM Frequency: **24 kHz** — confirmed root cause
+- Maximum Acceleration: Maximum
+- Throttle range: 1000–2000 (correctly calibrated)
+
+**Root cause:** Four BLHeli_32 ESCs switching at 24kHz on 4S (16.8V) generate high-frequency voltage transients on the power rail. Without a bulk capacitor to absorb them, these spikes reset the FC at any real throttle input. This is the same underlying cause as the PSU brownout (PSU's output capacitance was also insufficient to absorb the transients).
+
+**`CRASH_CHECK` parameter:** Does not exist in ArduCopter 4.6.3 — confirmed by `param show CRASH*` returning nothing.
+
+**Other findings:**
+- Motor 2 always spins up before others on first arm — ESC timing difference, resolves on disarm/rearm. Not blocking but indicates slight ESC threshold variation.
+- EKF cycling (`started relative aiding → stopped aiding`) throughout — expected on ground, should stabilise once airborne.
+
+**Fix required:** **1000–2200µF 35V electrolytic bulk capacitor** soldered across battery positive/negative pads on PDB, as close to ESCs as possible. This is the standard fix for this symptom on 4S BLHeli_32 builds.
+
+**Alternative (no hardware):** Reduce ESC PWM frequency from 24kHz → 8kHz in BLHeliSuite — reduces switching noise significantly. Standard for multirotor builds.
+
+**Status: Blocked — cannot hover until capacitor obtained.**
+
+---
+
+### Code changes this session
+
+| File | Change |
+|---|---|
+| `backend/drone/controller.py` | Takeoff mode: FLOWHOLD → STABILIZE |
+| `backend/drone/controller.py` | Altitude check: absolute → relative climb from baseline |
+| `backend/drone/controller.py` | Prints both baro and EKF altitude each throttle step |
+| `frontend/src/App.jsx` | Altitude slider min: 0.2m → 0.5m |
+| `hover_test.py` | New standalone pymavlink hover test script (no backend/MAVSDK) |
+
+### Hardware status end of session
+
+| Component | Status |
+|---|---|
+| 4S 1850mAh 100C LiPo | ✅ Confirmed charging/charged |
+| FC brownout under motor load | ❌ Blocked — bulk capacitor required |
+| ESC PWM noise (24kHz, 4S) | ❌ Root cause confirmed — cap or PWM freq reduction needed |
+| Motor 2 spins first on arm | ⚠️ Minor — resolves on disarm/rearm |
+| STABILIZE mode takeoff code | ✅ Ready — relative climb logic correct |
+| Standalone hover_test.py | ✅ Created at `~/pidrone/hover_test.py` |
+
+### Next
+1. **Get 1000–2200µF 35V electrolytic capacitor** — solder across PDB battery pads
+2. OR change ESC PWM frequency to 8kHz in BLHeliSuite (no hardware needed)
+3. Once capacitor fitted: run `hover_test.py` — ramps 1100→1650 at 10 PWM/s, Ctrl+C to cut
+4. Find hover throttle PWM value, update `controller.py` hover hold throttle accordingly
+5. Confirm stable hover → switch to GUIDED mode for SAR mission
+

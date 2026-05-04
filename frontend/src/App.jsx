@@ -302,7 +302,7 @@ export default function App() {
                   <label className="stat-label">Cruise Altitude</label>
                   <span className="text-sm font-mono font-bold" style={{ color: "#d4d820" }}>{altitude.toFixed(1)} m</span>
                 </div>
-                <input type="range" min="0.2" max="3" step="0.1"
+                <input type="range" min="0.5" max="3" step="0.1"
                   value={altitude} onChange={e => setAltitude(+e.target.value)} />
                 <div className="flex justify-between text-xs mt-1.5" style={{ color: "#3a4e34" }}>
                   <span>0.5 m</span><span>3.0 m</span>

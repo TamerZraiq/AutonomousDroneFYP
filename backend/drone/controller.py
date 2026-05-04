@@ -166,33 +166,51 @@ class DroneController:
         """
         loop = asyncio.get_running_loop()
 
-        # FLOWHOLD (22) = optical flow + baro, no position required
-        # ALT_HOLD (2)  = baro only, always accepted
-        ok = await loop.run_in_executor(None, self._try_mode, 22, "FLOWHOLD")
+        # STABILIZE (0) = direct throttle, no altitude controller, no EKF dependency
+        ok = await loop.run_in_executor(None, self._try_mode, 0, "STABILIZE")
         if not ok:
-            ok = await loop.run_in_executor(None, self._try_mode, 2, "ALT_HOLD")
-        if not ok:
-            raise RuntimeError("FC rejected both FLOWHOLD and ALT_HOLD — check arming state")
+            raise RuntimeError("FC rejected STABILIZE — check arming state")
 
-        # Start override loop, then ramp throttle slowly to avoid inrush current spike
+        # Start override loop, then ramp throttle gently to avoid current surge
         self._override_throttle = 1100
         if self._override_task is None or self._override_task.done():
             self._override_task = asyncio.create_task(self._rc_override_loop())
 
-        print(f"[DroneController] Ramping throttle — climbing to {alt} m")
-        for target in range(1150, 1701, 50):
+        # Capture baseline so hover detection is relative to wherever we start
+        snap0 = self.snapshot()
+        base_baro = snap0.rel_alt
+        base_ekf  = -snap0.local_down
+
+        def climb(snap) -> float:
+            # Returns metres climbed since arm — works regardless of EKF home offset
+            ekf_climb  = (-snap.local_down) - base_ekf
+            baro_climb = snap.rel_alt - base_baro
+            # Prefer EKF (rangefinder-backed) if it shows positive climb, else fall back to baro
+            return ekf_climb if ekf_climb > 0.05 else baro_climb
+
+        print(f"[DroneController] Ramping throttle — target {alt} m (base baro {base_baro:.2f} ekf {base_ekf:.2f})")
+        for target in range(1150, 1601, 25):
             self._override_throttle = target
-            await asyncio.sleep(0.3)   # full ramp takes ~3.3 s
+            snap = self.snapshot()
+            c = climb(snap)
+            print(f"[DroneController] Throttle {target} PWM | climb {c:.2f} m")
+            await asyncio.sleep(0.5)
+            if c >= alt * 0.85:
+                break
+
+        hover_throttle = self._override_throttle
         deadline = loop.time() + 30.0
         while loop.time() < deadline:
-            await asyncio.sleep(0.3)
-            if self.snapshot().rel_alt >= alt * 0.85:
-                self._override_throttle = 1500  # midpoint = hold altitude
-                print(f"[DroneController] Hovering at {self.snapshot().rel_alt:.2f} m ✓")
+            await asyncio.sleep(0.5)
+            snap = self.snapshot()
+            c = climb(snap)
+            print(f"[DroneController] Holding {hover_throttle} PWM | climb {c:.2f} m")
+            if c >= alt * 0.85:
+                print(f"[DroneController] Hovering at +{c:.2f} m above start ✓ (throttle {hover_throttle})")
                 return
 
-        self._override_throttle = 1500
-        raise RuntimeError(f"Takeoff timed out — only reached {self.snapshot().rel_alt:.2f} m")
+        self._override_throttle = 1100
+        raise RuntimeError(f"Takeoff timed out — only climbed {climb(self.snapshot()):.2f} m")
 
     async def land(self):
         if self._override_task and not self._override_task.done():
